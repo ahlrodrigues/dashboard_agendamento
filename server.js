@@ -256,22 +256,10 @@ function normalizeStatus(raw) {
       ""
   ).toLowerCase();
 
-  if (text.includes("indispon")) {
-    return "indisponivel";
-  }
   if (text.includes("agend")) {
     return "agendado";
   }
-  if (text.includes("confirm")) {
-    return "confirmado";
-  }
-  if (text.includes("abert") || text === "0" || text.includes("novo")) {
-    return "disponivel";
-  }
-  if (text.includes("cancel")) {
-    return "cancelado";
-  }
-  return "agendado";
+  return "pre_agendado";
 }
 
 function pickClientName(raw) {
@@ -319,7 +307,33 @@ function normalizeTechnician(raw) {
   );
 }
 
-function normalizeSchedule(raw, source = "sgp") {
+function pickClientId(raw) {
+  const value =
+    raw.id_cliente ||
+    raw.cliente_id ||
+    raw.idpessoa ||
+    raw.pessoa_id ||
+    raw.cod_cliente ||
+    raw.codigo_cliente ||
+    "";
+  return String(value || "").trim();
+}
+
+function buildClientUrl(config, raw) {
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    return "";
+  }
+
+  const clientId = pickClientId(raw);
+  if (clientId) {
+    return `${baseUrl}/admin/cliente/${encodeURIComponent(clientId)}/`;
+  }
+
+  return `${baseUrl}/admin/cliente/list/`;
+}
+
+function normalizeSchedule(config, raw, source = "sgp") {
   const date = isoDateOnly(
     raw.data_agendamento ||
     raw.data_agendada ||
@@ -345,7 +359,9 @@ function normalizeSchedule(raw, source = "sgp") {
     tecnico: normalizeTechnician(raw),
     data: date,
     horario: normalizeSlot(time),
+    hasScheduledDate: Boolean(date),
     status,
+    clienteUrl: buildClientUrl(config, raw),
     endereco: raw.endereco || raw.logradouro || "",
     observacao: raw.observacao || raw.descricao || raw.motivo || "",
     origem: source,
@@ -368,7 +384,9 @@ function normalizeManualSchedule(entry) {
     tecnico: entry.tecnico || "A definir",
     data: isoDateOnly(entry.data),
     horario: normalizeSlot(entry.horario),
+    hasScheduledDate: Boolean(isoDateOnly(entry.data)),
     status: entry.status || "pre_agendado",
+    clienteUrl: entry.clienteUrl || "",
     endereco: entry.endereco || "",
     observacao: entry.observacao || "",
     origem: "pre_agendamento_local",
@@ -390,6 +408,7 @@ function buildMockSchedules(referenceDate, slots) {
       data: base,
       horario: "08:00",
       status: "agendado",
+      clienteUrl: "",
       endereco: "Rua das Flores, 120",
       observacao: "Confirmado pelo Call Center",
       origem: "mock"
@@ -404,7 +423,8 @@ function buildMockSchedules(referenceDate, slots) {
       tecnico: "Eriki",
       data: plusDays(base, 1),
       horario: "10:00",
-      status: "confirmado",
+      status: "agendado",
+      clienteUrl: "",
       endereco: "Rua da Feira, 44",
       observacao: "Cliente solicitou visita na parte da manha",
       origem: "mock"
@@ -419,7 +439,8 @@ function buildMockSchedules(referenceDate, slots) {
       tecnico: "Wilton",
       data: plusDays(base, 2),
       horario: "14:00",
-      status: "indisponivel",
+      status: "pre_agendado",
+      clienteUrl: "",
       endereco: "Avenida Principal, 900",
       observacao: "Area bloqueada por manutencao",
       origem: "mock"
@@ -434,7 +455,8 @@ function buildMockSchedules(referenceDate, slots) {
       tecnico: "Micael",
       data: plusDays(base, 3),
       horario: slots[0] || "08:00",
-      status: "disponivel",
+      status: "pre_agendado",
+      clienteUrl: "",
       endereco: "",
       observacao: "Janela ainda aberta para encaixe",
       origem: "mock"
@@ -519,10 +541,7 @@ function compareSlots(a, b) {
 function summarizeSchedules(schedules) {
   const summary = {
     total: schedules.length,
-    disponivel: 0,
     agendado: 0,
-    confirmado: 0,
-    indisponivel: 0,
     pre_agendado: 0
   };
 
@@ -565,7 +584,9 @@ function serializeSchedule(item) {
     tecnico: item.tecnico,
     data: item.data,
     horario: item.horario,
+    hasScheduledDate: Boolean(item.hasScheduledDate),
     status: item.status,
+    clienteUrl: item.clienteUrl || "",
     endereco: item.endereco,
     observacao: item.observacao,
     origem: item.origem
@@ -590,7 +611,7 @@ async function getDashboardData(query) {
 
   try {
     const sgpRows = await listServiceOrders(config, { startDate, endDate });
-    schedules = sgpRows.map((item) => normalizeSchedule(item, "sgp")).filter((item) => item.data);
+    schedules = sgpRows.map((item) => normalizeSchedule(config, item, "sgp")).filter((item) => item.data);
     if (!schedules.length) {
       sourceMode = "mock";
       notices.push("Nenhum agendamento retornado pelo SGP para o periodo consultado. Exibindo dados de demonstracao.");
@@ -604,7 +625,7 @@ async function getDashboardData(query) {
 
   const manualSchedules = readManualSchedules().map(normalizeManualSchedule);
   schedules = schedules.concat(manualSchedules);
-  schedules = schedules.filter((item) => item.data >= startDate && item.data <= endDate);
+  schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
 
   const filtered = filterSchedules(schedules, { search, status });

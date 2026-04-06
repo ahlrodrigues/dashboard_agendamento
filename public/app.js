@@ -3,18 +3,18 @@ const state = {
 };
 
 const summaryConfig = [
-  { key: "disponivel", label: "Horarios Disponiveis", className: "green" },
-  { key: "agendado", label: "Agendamentos", className: "blue" },
-  { key: "confirmado", label: "Confirmados", className: "cyan" },
-  { key: "indisponivel", label: "Indisponiveis", className: "red" },
-  { key: "pre_agendado", label: "Pre-agendados Locais", className: "amber" }
+  { key: "agendado", label: "Agendadas", className: "blue" },
+  { key: "pre_agendado", label: "Pre-agendadas", className: "amber" }
 ];
 
 const elements = {
-  dateFilter: document.querySelector("#dateFilter"),
+  startDateFilter: document.querySelector("#startDateFilter"),
+  endDateFilter: document.querySelector("#endDateFilter"),
   statusFilter: document.querySelector("#statusFilter"),
   searchFilter: document.querySelector("#searchFilter"),
   refreshButton: document.querySelector("#refreshButton"),
+  prevWeekButton: document.querySelector("#prevWeekButton"),
+  nextWeekButton: document.querySelector("#nextWeekButton"),
   summaryCards: document.querySelector("#summaryCards"),
   calendarGrid: document.querySelector("#calendarGrid"),
   scheduleTableBody: document.querySelector("#scheduleTableBody"),
@@ -41,6 +41,12 @@ function formatDateTime(dateText) {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(dateText));
+}
+
+function shiftDate(dateText, days) {
+  const date = new Date(`${dateText}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function badgeClassForSource(sourceMode) {
@@ -99,7 +105,7 @@ function renderCalendar(grid) {
       const items = grid.cells[day.date]?.[slot] || [];
       fragments.push(`
         <div class="calendar-cell">
-          ${items.length ? items.map(renderChip).join("") : '<span class="muted">Livre</span>'}
+          ${items.length ? items.map(renderChip).join("") : ""}
         </div>
       `);
     }
@@ -109,23 +115,37 @@ function renderCalendar(grid) {
 }
 
 function renderChip(item) {
+  const clientName = renderClientLink(item, item.cliente);
   return `
     <div class="chip ${item.status}">
-      <strong>${item.cliente}</strong>
+      <strong>${clientName}</strong>
       <small>${item.rota} ${item.tecnico ? `· ${item.tecnico}` : ""}</small>
-      <small>${statusLabel(item.status)}</small>
     </div>
   `;
 }
 
+function renderClientLink(item, label) {
+  if (!item.clienteUrl) {
+    return escapeHtml(label);
+  }
+  return `<a class="client-link" href="${escapeHtml(item.clienteUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function statusLabel(status) {
   const map = {
-    disponivel: "Disponivel",
-    agendado: "Agendado",
-    confirmado: "Confirmado",
-    indisponivel: "Indisponivel",
-    pre_agendado: "Pre-agendamento local",
-    cancelado: "Cancelado"
+    agendado: "Agendada",
+    pre_agendado: "Pre-agendada",
+    indisponivel: "Pre-agendada",
+    total: "Total"
   };
   return map[status] || status;
 }
@@ -133,7 +153,7 @@ function statusLabel(status) {
 function renderTable(rows) {
   elements.tableCount.textContent = `${rows.length} registros`;
   if (!rows.length) {
-    elements.scheduleTableBody.innerHTML = `<tr><td class="empty-state" colspan="7">Nenhum agendamento encontrado para os filtros atuais.</td></tr>`;
+    elements.scheduleTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">Nenhum agendamento encontrado para os filtros atuais.</td></tr>`;
     return;
   }
 
@@ -144,13 +164,12 @@ function renderTable(rows) {
           <td>${formatDate(item.data)}</td>
           <td>${item.horario || "-"}</td>
           <td>
-            <strong>${item.cliente}</strong><br />
+            <strong>${renderClientLink(item, item.cliente)}</strong><br />
             <span class="muted">${item.protocolo || item.contrato || "-"}</span>
           </td>
           <td>${item.rota || "-"}</td>
           <td>${item.tecnico || "-"}</td>
           <td><span class="badge neutral">${statusLabel(item.status)}</span></td>
-          <td>${item.origem || "-"}</td>
         </tr>
       `
     )
@@ -177,8 +196,12 @@ function updateMeta(data) {
 
 async function loadDashboard() {
   const params = new URLSearchParams();
-  if (elements.dateFilter.value) {
-    params.set("data", elements.dateFilter.value);
+  if (elements.startDateFilter.value) {
+    params.set("data", elements.startDateFilter.value);
+    params.set("inicio", elements.startDateFilter.value);
+  }
+  if (elements.endDateFilter.value) {
+    params.set("fim", elements.endDateFilter.value);
   }
   if (elements.statusFilter.value) {
     params.set("status", elements.statusFilter.value);
@@ -196,6 +219,13 @@ async function loadDashboard() {
   renderCalendar(data.grid);
   renderTable(data.schedules);
   updateMeta(data);
+
+  if (!elements.startDateFilter.value || elements.startDateFilter.value !== data.period.startDate) {
+    elements.startDateFilter.value = data.period.startDate;
+  }
+  if (!elements.endDateFilter.value || elements.endDateFilter.value !== data.period.endDate) {
+    elements.endDateFilter.value = data.period.endDate;
+  }
 }
 
 async function submitSchedule(event) {
@@ -215,19 +245,29 @@ async function submitSchedule(event) {
   alert(data.message || "Operacao concluida.");
   if (data.ok) {
     elements.scheduleForm.reset();
-    if (elements.dateFilter.value) {
-      elements.scheduleForm.elements.data.value = elements.dateFilter.value;
-    }
+    elements.scheduleForm.elements.data.value = elements.startDateFilter.value || new Date().toISOString().slice(0, 10);
     await loadDashboard();
   }
 }
 
 function wireEvents() {
   elements.refreshButton.addEventListener("click", loadDashboard);
+  elements.prevWeekButton.addEventListener("click", () => navigateWeek(-7));
+  elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
   elements.statusFilter.addEventListener("change", loadDashboard);
-  elements.dateFilter.addEventListener("change", loadDashboard);
+  elements.startDateFilter.addEventListener("change", loadDashboard);
+  elements.endDateFilter.addEventListener("change", loadDashboard);
   elements.searchFilter.addEventListener("input", debounce(loadDashboard, 250));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
+}
+
+function navigateWeek(offsetDays) {
+  if (!elements.startDateFilter.value || !elements.endDateFilter.value) {
+    return;
+  }
+  elements.startDateFilter.value = shiftDate(elements.startDateFilter.value, offsetDays);
+  elements.endDateFilter.value = shiftDate(elements.endDateFilter.value, offsetDays);
+  loadDashboard();
 }
 
 function debounce(fn, wait) {
@@ -240,7 +280,10 @@ function debounce(fn, wait) {
 
 function init() {
   const today = new Date().toISOString().slice(0, 10);
-  elements.dateFilter.value = today;
+  const end = new Date(`${today}T12:00:00`);
+  end.setDate(end.getDate() + 14);
+  elements.startDateFilter.value = today;
+  elements.endDateFilter.value = end.toISOString().slice(0, 10);
   elements.scheduleForm.elements.data.value = today;
   wireEvents();
   loadDashboard().catch((error) => {

@@ -23,20 +23,24 @@
             <button id="refreshButton" class="ghost-button" type="button">Atualizar</button>
           </div>
 
-          <label class="field">
-            <span>Data base</span>
-            <input id="dateFilter" type="date" />
-          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Data inicial</span>
+              <input id="startDateFilter" type="date" />
+            </label>
+
+            <label class="field">
+              <span>Data final</span>
+              <input id="endDateFilter" type="date" />
+            </label>
+          </div>
 
           <label class="field">
             <span>Status</span>
             <select id="statusFilter">
               <option value="todos">Todos</option>
-              <option value="disponivel">Disponivel</option>
-              <option value="agendado">Agendado</option>
-              <option value="confirmado">Confirmado</option>
-              <option value="indisponivel">Indisponivel</option>
-              <option value="pre_agendado">Pre-agendado local</option>
+              <option value="agendado">Agendada</option>
+              <option value="pre_agendado">Pre-agendada</option>
             </select>
           </label>
 
@@ -74,7 +78,7 @@
             </label>
 
             <label class="field">
-              <span>Rota</span>
+              <span>POP</span>
               <input name="rota" type="text" />
             </label>
 
@@ -129,7 +133,11 @@
         <section class="calendar-panel">
           <div class="panel-header">
             <h2>Calendario Semanal</h2>
-            <span id="weekRange" class="muted">-</span>
+            <div class="calendar-nav">
+              <button id="prevWeekButton" class="ghost-button nav-button" type="button" aria-label="Semana anterior">&larr;</button>
+              <span id="weekRange" class="muted">-</span>
+              <button id="nextWeekButton" class="ghost-button nav-button" type="button" aria-label="Próxima semana">&rarr;</button>
+            </div>
           </div>
           <div id="calendarGrid" class="calendar-grid"></div>
         </section>
@@ -146,10 +154,9 @@
                   <th>Data</th>
                   <th>Horario</th>
                   <th>Cliente</th>
-                  <th>Rota</th>
+                  <th>POP</th>
                   <th>Tecnico</th>
                   <th>Status</th>
-                  <th>Origem</th>
                 </tr>
               </thead>
               <tbody id="scheduleTableBody"></tbody>

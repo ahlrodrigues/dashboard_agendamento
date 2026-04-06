@@ -109,6 +109,18 @@ p {
   gap: 12px;
 }
 
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-button {
+  min-width: 42px;
+  padding: 10px 12px;
+  font-weight: 700;
+}
+
 .stack-form {
   display: flex;
   flex-direction: column;
@@ -206,7 +218,7 @@ textarea:focus {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -225,20 +237,8 @@ textarea:focus {
   font-size: 2rem;
 }
 
-.summary-card.green {
-  background: linear-gradient(135deg, #28a745, #58c770);
-}
-
 .summary-card.blue {
   background: linear-gradient(135deg, #1768d6, #33a3ff);
-}
-
-.summary-card.cyan {
-  background: linear-gradient(135deg, #0d8db8, #4fc5ef);
-}
-
-.summary-card.red {
-  background: linear-gradient(135deg, #d34b4b, #f57a7a);
 }
 
 .summary-card.amber {
@@ -292,20 +292,17 @@ textarea:focus {
   opacity: 0.88;
 }
 
-.chip.disponivel {
-  background: linear-gradient(135deg, #2ead61, #6acd85);
+.client-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.client-link:hover {
+  text-decoration: underline;
 }
 
 .chip.agendado {
   background: linear-gradient(135deg, #0f67d6, #48a2ff);
-}
-
-.chip.confirmado {
-  background: linear-gradient(135deg, #0e90b5, #58d0e8);
-}
-
-.chip.indisponivel {
-  background: linear-gradient(135deg, #cc4646, #f37a7a);
 }
 
 .chip.pre_agendado {
