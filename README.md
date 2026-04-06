@@ -77,6 +77,82 @@ Para desenvolvimento:
 npm run dev
 ```
 
+## Deploy no mesmo servidor do dashboard_tecnico
+
+Este projeto pode rodar no mesmo servidor do `dashboard_tecnico`, desde que use diretorio e porta proprios.
+
+Sugestao:
+
+- diretorio: `/var/www/html/dashboard_agendamento-live`
+- porta: `8780`
+
+### Clonar no servidor
+
+```bash
+mkdir -p /var/www/html/dashboard_agendamento-live
+cd /var/www/html
+git clone git@github.com:ahlrodrigues/dashboard_agendamento.git dashboard_agendamento-live
+cd dashboard_agendamento-live
+cp config.example.json config.json
+```
+
+Depois ajuste o `config.json` com as credenciais e configuracoes reais do SGP.
+
+### Subir o servidor
+
+```bash
+chmod +x garantir_dashboard_server.sh reiniciar_dashboard_server.sh atualizar_live.sh
+./garantir_dashboard_server.sh
+```
+
+Por padrao, o servidor sobe em:
+
+```text
+http://127.0.0.1:8780
+```
+
+### Atualizar via pull no servidor
+
+Para atualizar a branch `main` no servidor com seguranca e reiniciar a aplicacao:
+
+```bash
+./atualizar_live.sh
+```
+
+Ou para explicitar a branch:
+
+```bash
+./atualizar_live.sh main
+```
+
+Esse script:
+
+- faz `git fetch --prune origin`
+- valida se a branch local nao esta divergente
+- aplica apenas `fast-forward`
+- reinicia o servidor do dashboard
+
+### Instalar cron de 5 em 5 minutos
+
+Para garantir que o servidor do dashboard seja religado automaticamente caso caia:
+
+```bash
+chmod +x instalar_cron_dashboard.sh
+./instalar_cron_dashboard.sh
+```
+
+Esse script instala uma entrada no `crontab` para executar `garantir_dashboard_server.sh` a cada 5 minutos.
+
+### Variaveis uteis no servidor
+
+```bash
+DASHBOARD_BASE_DIR=/var/www/html/dashboard_agendamento-live
+DASHBOARD_SERVER_HOST=0.0.0.0
+DASHBOARD_SERVER_PORT=8780
+DASHBOARD_SERVER_CHECK_HOST=127.0.0.1
+DASHBOARD_LOG_FILE=/var/www/html/dashboard_agendamento-live/dashboard_server.log
+```
+
 ## Estado atual
 
 - leitura do SGP: pronta

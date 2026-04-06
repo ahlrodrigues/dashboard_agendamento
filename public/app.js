@@ -142,6 +142,7 @@ function escapeHtml(value) {
 
 function statusLabel(status) {
   const map = {
+    disponivel: "Pre-agendada",
     agendado: "Agendada",
     pre_agendado: "Pre-agendada",
     indisponivel: "Pre-agendada",
