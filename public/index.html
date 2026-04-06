@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agenda SGP Call Center</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <p class="eyebrow">SGP + Call Center</p>
+          <h1>Agenda de Agendamentos</h1>
+          <p class="muted">
+            Painel operacional para acompanhar horarios, confirmar clientes e registrar novos encaixes.
+          </p>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Filtros</h2>
+            <button id="refreshButton" class="ghost-button" type="button">Atualizar</button>
+          </div>
+
+          <label class="field">
+            <span>Data base</span>
+            <input id="dateFilter" type="date" />
+          </label>
+
+          <label class="field">
+            <span>Status</span>
+            <select id="statusFilter">
+              <option value="todos">Todos</option>
+              <option value="disponivel">Disponivel</option>
+              <option value="agendado">Agendado</option>
+              <option value="confirmado">Confirmado</option>
+              <option value="indisponivel">Indisponivel</option>
+              <option value="pre_agendado">Pre-agendado local</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Busca</span>
+            <input id="searchFilter" type="search" placeholder="Cliente, contrato, protocolo..." />
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Novo Agendamento</h2>
+            <span id="writeModeBadge" class="badge neutral">Carregando</span>
+          </div>
+
+          <form id="scheduleForm" class="stack-form">
+            <label class="field">
+              <span>Cliente</span>
+              <input name="cliente" type="text" required />
+            </label>
+
+            <label class="field">
+              <span>Contrato</span>
+              <input name="contrato" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Telefone</span>
+              <input name="telefone" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Protocolo</span>
+              <input name="protocolo" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Rota</span>
+              <input name="rota" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Tecnico</span>
+              <input name="tecnico" type="text" />
+            </label>
+
+            <div class="field-row">
+              <label class="field">
+                <span>Data</span>
+                <input name="data" type="date" required />
+              </label>
+
+              <label class="field">
+                <span>Horario</span>
+                <input name="horario" type="time" required />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Endereco</span>
+              <input name="endereco" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Observacao</span>
+              <textarea name="observacao" rows="3"></textarea>
+            </label>
+
+            <button class="primary-button" type="submit">Salvar agendamento</button>
+          </form>
+        </section>
+      </aside>
+
+      <main class="content">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Operacao em tempo real</p>
+            <h2>Visao semanal dos agendamentos integrados ao SGP</h2>
+          </div>
+          <div class="hero-meta">
+            <span id="sourceBadge" class="badge neutral">Fonte</span>
+            <span id="snapshotLabel" class="snapshot">Sem dados</span>
+          </div>
+        </header>
+
+        <section id="noticeArea" class="notice-area"></section>
+
+        <section id="summaryCards" class="summary-grid"></section>
+
+        <section class="calendar-panel">
+          <div class="panel-header">
+            <h2>Calendario Semanal</h2>
+            <span id="weekRange" class="muted">-</span>
+          </div>
+          <div id="calendarGrid" class="calendar-grid"></div>
+        </section>
+
+        <section class="table-panel">
+          <div class="panel-header">
+            <h2>Fila de Agendamentos</h2>
+            <span id="tableCount" class="muted">0 registros</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Horario</th>
+                  <th>Cliente</th>
+                  <th>Rota</th>
+                  <th>Tecnico</th>
+                  <th>Status</th>
+                  <th>Origem</th>
+                </tr>
+              </thead>
+              <tbody id="scheduleTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+  </html>

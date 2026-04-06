@@ -1,0 +1,6 @@
+.codex
+node_modules/
+data/
+config.json
+config.local.json
+*.log

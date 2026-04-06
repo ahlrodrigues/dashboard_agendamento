@@ -1,0 +1,37 @@
+{
+  "url_base": "https://sgp.exemplo.com.br/",
+  "auth_mode": "basic",
+  "basic_auth": {
+    "username": "SEU_USUARIO",
+    "password": "SUA_SENHA"
+  },
+  "app_token_auth": {
+    "app": "SEU_APP",
+    "token": "SEU_TOKEN"
+  },
+  "dashboard": {
+    "atualizacao_segundos": 300,
+    "janela_dias_passado": 7,
+    "janela_dias_futuro": 14,
+    "timeout_sgp_ms": 12000,
+    "horarios_padrao": [
+      "08:00",
+      "09:00",
+      "10:00",
+      "11:00",
+      "13:00",
+      "14:00",
+      "15:00",
+      "16:00"
+    ]
+  },
+  "agendamento": {
+    "endpoint_lista": "/api/ura/ordemservico/list/",
+    "endpoint_agendar": "",
+    "statuses_consulta": [
+      0,
+      1
+    ],
+    "permite_pre_agendamento_local": true
+  }
+}
