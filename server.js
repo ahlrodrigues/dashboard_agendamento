@@ -50,7 +50,12 @@ function loadConfig() {
     },
     agendamento: {
       endpoint_lista: "/api/ura/ordemservico/list/",
-      endpoint_agendar: "",
+      endpoint_contrato: "/api/suporte/contrato/list/",
+      endpoint_agendar: "/api/ura/chamado/",
+      ocorrencia_tipo_padrao: 5,
+      motivo_os_padrao: 1,
+      setor_padrao: 1,
+      prioridade_os_padrao: 2,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
       ...(config.agendamento || {})
@@ -114,7 +119,21 @@ async function postToSgp(config, endpointPath, payload) {
   });
 
   if (!response.ok) {
-    throw new Error(`Falha no SGP (${response.status} ${response.statusText})`);
+    let detail = "";
+    try {
+      const errorText = await response.text();
+      if (errorText) {
+        try {
+          const errorJson = JSON.parse(errorText);
+          detail = errorJson.message || errorJson.msg || errorJson.detail || errorText;
+        } catch (error) {
+          detail = errorText;
+        }
+      }
+    } catch (error) {
+      detail = "";
+    }
+    throw new Error(detail ? `Falha no SGP (${response.status}): ${detail}` : `Falha no SGP (${response.status} ${response.statusText})`);
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -182,6 +201,53 @@ async function listServiceOrders(config, { startDate, endDate }) {
   return dedupeBy(results, (item) => String(item.id || item.os_id || item.pk || JSON.stringify(item)));
 }
 
+async function lookupContract(config, contractId) {
+  const endpoint = String(config.agendamento?.endpoint_contrato || "/api/suporte/contrato/list/").trim();
+  if (!endpoint) {
+    throw new Error("Endpoint de consulta de contrato nao configurado.");
+  }
+
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error("url_base nao configurada.");
+  }
+
+  const url = `${baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildAuthHeaders(config)
+    },
+    body: JSON.stringify({
+      contrato_id: String(contractId || "").trim()
+    }),
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  if (!response.ok) {
+    throw new Error(`Falha no SGP (${response.status} ${response.statusText})`);
+  }
+
+  const data = await response.json();
+  const rows = extractListFromResponse(data);
+
+  if (!Array.isArray(rows)) {
+    throw new Error("Formato inesperado na consulta de contrato.");
+  }
+
+  const normalizedContractId = String(contractId || "").trim();
+  const raw =
+    rows.find((item) => String(item.contrato_id || item.contrato || "").trim() === normalizedContractId) ||
+    rows[0];
+
+  if (!raw) {
+    throw new Error("Contrato nao encontrado no SGP.");
+  }
+
+  return normalizeContractLookup(config, raw);
+}
+
 function dedupeBy(items, keyFn) {
   const seen = new Set();
   const output = [];
@@ -206,6 +272,16 @@ function saveManualSchedule(entry) {
   rows.push(entry);
   writeJson(MANUAL_SCHEDULES_PATH, rows);
   return entry;
+}
+
+function deleteManualSchedule(entryId) {
+  const rows = readManualSchedules();
+  const nextRows = rows.filter((item) => String(item.id || "") !== String(entryId || ""));
+  if (nextRows.length === rows.length) {
+    return false;
+  }
+  writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  return true;
 }
 
 function isoDateOnly(value) {
@@ -325,12 +401,45 @@ function buildClientUrl(config, raw) {
     return "";
   }
 
+  const osId = String(raw.os_id || raw.id || "").trim();
+  if (osId) {
+    return `${baseUrl}/api/os/print/id/${encodeURIComponent(osId)}/`;
+  }
+
   const clientId = pickClientId(raw);
   if (clientId) {
     return `${baseUrl}/admin/cliente/${encodeURIComponent(clientId)}/`;
   }
 
   return `${baseUrl}/admin/cliente/list/`;
+}
+
+function buildAddressText(raw) {
+  const parts = [
+    raw.endereco_logradouro,
+    raw.endereco_numero,
+    raw.endereco_complemento,
+    raw.endereco_bairro,
+    raw.endereco_cidade,
+    raw.endereco_uf
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return parts.join(", ");
+}
+
+function normalizeContractLookup(config, raw) {
+  const clientId = String(raw.cliente_id || raw.id_cliente || "").trim();
+  return {
+    contrato: String(raw.contrato_id || raw.contrato || "").trim(),
+    cliente: String(raw.cliente_nome || raw.cliente || raw.razaosocial || "").trim(),
+    telefone: String(raw.cliente_contato || raw.telefone || raw.celular || raw.fone || "").trim(),
+    rota: String(raw.contrato_pop_nome || raw.contrato_pop || raw.pop || "").trim(),
+    endereco: buildAddressText(raw),
+    clienteId: clientId,
+    clienteUrl: buildClientUrl(config, { cliente_id: clientId })
+  };
 }
 
 function normalizeSchedule(config, raw, source = "sgp") {
@@ -351,6 +460,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
+    osId: String(raw.os_id || raw.id || ""),
     protocolo: pickProtocol(raw),
     cliente: pickClientName(raw),
     contrato: String(raw.id_contrato || raw.contrato || raw.codigo_cliente || ""),
@@ -376,6 +486,7 @@ function cryptoRandomId() {
 function normalizeManualSchedule(entry) {
   return {
     id: entry.id || `manual-${cryptoRandomId()}`,
+    osId: "",
     protocolo: entry.protocolo || "",
     cliente: entry.cliente || "Cliente nao identificado",
     contrato: entry.contrato || "",
@@ -576,6 +687,7 @@ function filterSchedules(schedules, { search, status }) {
 function serializeSchedule(item) {
   return {
     id: item.id,
+    osId: item.osId || "",
     protocolo: item.protocolo,
     cliente: item.cliente,
     contrato: item.contrato,
@@ -646,7 +758,7 @@ async function getDashboardData(query) {
     sourceMode,
     notices,
     capabilities: {
-      canWriteToSgp: Boolean(config.agendamento?.endpoint_agendar),
+      canWriteToSgp: Boolean(String(config.agendamento?.endpoint_agendar || "").trim()),
       canSavePreScheduling: Boolean(config.agendamento?.permite_pre_agendamento_local)
     },
     summary,
@@ -656,6 +768,125 @@ async function getDashboardData(query) {
     },
     grid,
     schedules: serializedSchedules
+  };
+}
+
+function toScheduledDateTime(date, time) {
+  if (!date || !time || time === "A definir") {
+    return "";
+  }
+  return `${date} ${time.slice(0, 5)}`;
+}
+
+function currentDateTimeForSgp() {
+  const now = new Date();
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0")
+  ];
+  const time = [
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0")
+  ];
+  return `${parts.join("-")} ${time.join(":")}`;
+}
+
+function buildCreateCallPayload(config, entry) {
+  const content = entry.observacao || `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
+  const payload = {
+    contrato: entry.contrato,
+    conteudo: content,
+    observacao: entry.observacao || "",
+    ocorrenciatipo: Number(config.agendamento?.ocorrencia_tipo_padrao || 5),
+    motivoos: Number(config.agendamento?.motivo_os_padrao || 1),
+    setor: Number(config.agendamento?.setor_padrao || 1),
+    os_prioridade: Number(config.agendamento?.prioridade_os_padrao || 2),
+    contato_nome: entry.cliente,
+    contato_telefone: entry.telefone || "",
+    data_hora_agendamento: toScheduledDateTime(entry.data, entry.horario)
+  };
+
+  if (entry.tecnico) {
+    payload.responsavel = entry.tecnico;
+  }
+
+  return payload;
+}
+
+async function postJsonToSgp(config, endpointPath, payload) {
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error("url_base nao configurada.");
+  }
+
+  const url = `${baseUrl}${endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildAuthHeaders(config)
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errorText = await response.text();
+      if (errorText) {
+        try {
+          const errorJson = JSON.parse(errorText);
+          detail = errorJson.message || errorJson.msg || errorJson.detail || errorText;
+        } catch (error) {
+          detail = errorText;
+        }
+      }
+    } catch (error) {
+      detail = "";
+    }
+    throw new Error(detail ? `Falha no SGP (${response.status}): ${detail}` : `Falha no SGP (${response.status} ${response.statusText})`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error("Resposta nao JSON retornada pelo SGP.");
+  }
+}
+
+async function closeSgpSchedule(config, osId) {
+  const app = String(config.app_token_auth?.app || "").trim();
+  const token = String(config.app_token_auth?.token || "").trim();
+
+  if (String(config.auth_mode || "").toLowerCase() === "app_token" && app && token) {
+    const endpoint = `/api/central/chamado/update/${encodeURIComponent(String(osId || "").trim())}/`;
+    return {
+      mode: "central_chamado_update",
+      response: await postToSgp(config, endpoint, {
+        os_status: 1,
+        ocorrencia_encerrar: 1,
+        os_data_agendamento: "",
+        notificar_cliente: ""
+      })
+    };
+  }
+
+  const endpoint = `/api/os/update/id/${encodeURIComponent(String(osId || "").trim())}/`;
+  return {
+    mode: "os_update_only",
+    response: await postToSgp(config, endpoint, {
+      os_status: 1,
+      os_data_finalizacao: currentDateTimeForSgp()
+    })
   };
 }
 
@@ -674,12 +905,12 @@ async function createSchedule(payload) {
     observacao: String(payload.observacao || "").trim()
   };
 
-  if (!entry.cliente || !entry.data || !entry.horario) {
+  if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
     return {
       statusCode: 400,
       body: {
         ok: false,
-        message: "Informe pelo menos cliente, data e horario."
+        message: "Informe pelo menos cliente, contrato, data e horario."
       }
     };
   }
@@ -687,14 +918,16 @@ async function createSchedule(payload) {
   const endpoint = String(config.agendamento?.endpoint_agendar || "").trim();
   if (endpoint) {
     try {
-      const response = await postToSgp(config, endpoint, payload);
+      const response = await postJsonToSgp(config, endpoint, buildCreateCallPayload(config, entry));
+      const rows = extractListFromResponse(response);
+      const created = Array.isArray(rows) && rows.length ? rows[0] : response;
       return {
         statusCode: 201,
         body: {
           ok: true,
           mode: "sgp",
-          message: "Agendamento enviado ao SGP com sucesso.",
-          response
+          message: "Ocorrencia e agendamento enviados ao SGP com sucesso.",
+          response: created
         }
       };
     } catch (error) {
@@ -734,6 +967,100 @@ async function createSchedule(payload) {
       mode: "local",
       message: "Pre-agendamento salvo localmente. Falta sincronizar com o SGP.",
       schedule: saved
+    }
+  };
+}
+
+async function getContractData(contractId) {
+  const normalizedContractId = String(contractId || "").trim();
+  if (!normalizedContractId) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Informe o ID do contrato."
+      }
+    };
+  }
+
+  const config = loadConfig();
+  const contract = await lookupContract(config, normalizedContractId);
+  return {
+    statusCode: 200,
+    body: {
+      ok: true,
+      contract
+    }
+  };
+}
+
+async function deleteSchedule(payload) {
+  const id = String(payload.id || "").trim();
+  const origem = String(payload.origem || "").trim();
+  const osId = String(payload.osId || "").trim();
+
+  if (!id) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Agendamento nao informado."
+      }
+    };
+  }
+
+  if (origem === "pre_agendamento_local") {
+    const deleted = deleteManualSchedule(id);
+    return deleted
+      ? {
+          statusCode: 200,
+          body: {
+            ok: true,
+            mode: "local",
+            message: "Agendamento local removido com sucesso."
+          }
+        }
+      : {
+          statusCode: 404,
+          body: {
+            ok: false,
+            message: "Agendamento local nao encontrado."
+          }
+        };
+  }
+
+  if (origem === "sgp") {
+    if (!osId) {
+      return {
+        statusCode: 400,
+        body: {
+          ok: false,
+          message: "OS do agendamento nao identificada para encerramento no SGP."
+        }
+      };
+    }
+
+    const config = loadConfig();
+    const result = await closeSgpSchedule(config, osId);
+    const message = result.mode === "central_chamado_update"
+      ? "Agendamento encerrado no SGP com OS e ocorrencia fechadas."
+      : "Agendamento encerrado no SGP com fechamento da OS. A ocorrencia nao foi encerrada porque a configuracao atual nao usa app/token.";
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        mode: "sgp",
+        message,
+        response: result.response
+      }
+    };
+  }
+
+  return {
+    statusCode: 400,
+    body: {
+      ok: false,
+      message: "Origem do agendamento nao suportada para exclusao."
     }
   };
 }
@@ -807,9 +1134,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && parsedUrl.pathname === "/api/contrato") {
+      const result = await getContractData(parsedUrl.searchParams.get("contrato"));
+      sendJson(res, result.statusCode, result.body);
+      return;
+    }
+
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
       const payload = await collectRequestBody(req);
       const result = await createSchedule(payload);
+      sendJson(res, result.statusCode, result.body);
+      return;
+    }
+
+    if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/delete") {
+      const payload = await collectRequestBody(req);
+      const result = await deleteSchedule(payload);
       sendJson(res, result.statusCode, result.body);
       return;
     }

@@ -4,3 +4,4 @@ data/
 config.json
 config.local.json
 *.log
+*.pid

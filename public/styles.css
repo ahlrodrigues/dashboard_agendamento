@@ -135,6 +135,34 @@ p {
   font-size: 0.92rem;
 }
 
+.inline-action {
+  display: flex;
+  gap: 10px;
+}
+
+.inline-action input {
+  flex: 1;
+}
+
+.inline-button {
+  flex-shrink: 0;
+  min-width: 92px;
+  padding-inline: 14px;
+}
+
+.field-hint {
+  min-height: 1.1rem;
+  color: var(--muted);
+}
+
+.field-hint.success {
+  color: #17703b;
+}
+
+.field-hint.error {
+  color: #9a2824;
+}
+
 .field-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -285,11 +313,40 @@ textarea:focus {
   color: white;
   font-size: 0.84rem;
   line-height: 1.3;
+  position: relative;
 }
 
 .chip small {
   display: block;
   opacity: 0.88;
+}
+
+.chip-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.chip-delete-button {
+  border: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.22);
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chip-delete-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.chip-delete-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .client-link {
@@ -411,6 +468,10 @@ tbody tr:hover {
 
   .field-row {
     grid-template-columns: 1fr;
+  }
+
+  .inline-action {
+    flex-direction: column;
   }
 
   .hero,

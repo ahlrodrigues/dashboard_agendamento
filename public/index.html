@@ -64,7 +64,11 @@
 
             <label class="field">
               <span>Contrato</span>
-              <input name="contrato" type="text" />
+              <div class="inline-action">
+                <input name="contrato" type="text" />
+                <button id="lookupContractButton" class="ghost-button inline-button" type="button">Buscar</button>
+              </div>
+              <small id="contractLookupStatus" class="field-hint" aria-live="polite"></small>
             </label>
 
             <label class="field">
@@ -109,7 +113,7 @@
               <textarea name="observacao" rows="3"></textarea>
             </label>
 
-            <button class="primary-button" type="submit">Salvar agendamento</button>
+            <button class="primary-button" type="submit">Criar no SGP</button>
           </form>
         </section>
       </aside>

@@ -1,5 +1,6 @@
 const state = {
-  data: null
+  data: null,
+  schedulesById: new Map()
 };
 
 const summaryConfig = [
@@ -24,7 +25,9 @@ const elements = {
   snapshotLabel: document.querySelector("#snapshotLabel"),
   writeModeBadge: document.querySelector("#writeModeBadge"),
   noticeArea: document.querySelector("#noticeArea"),
-  scheduleForm: document.querySelector("#scheduleForm")
+  scheduleForm: document.querySelector("#scheduleForm"),
+  lookupContractButton: document.querySelector("#lookupContractButton"),
+  contractLookupStatus: document.querySelector("#contractLookupStatus")
 };
 
 function formatDate(dateText) {
@@ -116,12 +119,37 @@ function renderCalendar(grid) {
 
 function renderChip(item) {
   const clientName = renderClientLink(item, item.cliente);
+  const routeLabel = escapeHtml(item.rota || "");
+  const technicianName = getDisplayTechnicianName(item.tecnico);
+  const technicianLabel = technicianName ? `Tecnico: ${escapeHtml(technicianName)}` : "Tecnico:";
+  const deleteButton = canDeleteSchedule(item)
+    ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
+    : "";
   return `
     <div class="chip ${item.status}">
+      <div class="chip-actions">${deleteButton}</div>
       <strong>${clientName}</strong>
-      <small>${item.rota} ${item.tecnico ? `· ${item.tecnico}` : ""}</small>
+      <small>${routeLabel}<br />${technicianLabel}</small>
     </div>
   `;
+}
+
+function canDeleteSchedule(item) {
+  return item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId);
+}
+
+function getDisplayTechnicianName(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const placeholderValues = new Set(["nao definido", "não definido", "a definir", "-"]);
+  if (placeholderValues.has(normalized.toLowerCase())) {
+    return "";
+  }
+
+  return normalized;
 }
 
 function renderClientLink(item, label) {
@@ -138,6 +166,17 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function setContractLookupStatus(message, tone = "") {
+  elements.contractLookupStatus.textContent = message || "";
+  elements.contractLookupStatus.className = `field-hint${tone ? ` ${tone}` : ""}`;
+}
+
+function resetContractLookupState() {
+  elements.scheduleForm.dataset.loadedContract = "";
+  setContractLookupStatus("");
+  elements.lookupContractButton.disabled = false;
 }
 
 function statusLabel(status) {
@@ -214,6 +253,7 @@ async function loadDashboard() {
   const response = await fetch(`/api/dashboard-data?${params.toString()}`);
   const data = await response.json();
   state.data = data;
+  state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
 
   renderSummary(data.summary);
   renderNotices(data.notices);
@@ -226,6 +266,61 @@ async function loadDashboard() {
   }
   if (!elements.endDateFilter.value || elements.endDateFilter.value !== data.period.endDate) {
     elements.endDateFilter.value = data.period.endDate;
+  }
+}
+
+function deleteConfirmMessage(item) {
+  if (item.origem === "pre_agendamento_local") {
+    return `Excluir localmente o agendamento de ${item.cliente}?`;
+  }
+  return `Encerrar no SGP o agendamento de ${item.cliente}?`;
+}
+
+async function handleCalendarGridClick(event) {
+  const button = event.target.closest(".chip-delete-button");
+  if (!button) {
+    return;
+  }
+
+  const scheduleId = button.dataset.scheduleId || "";
+  const item = state.schedulesById.get(scheduleId);
+  if (!item) {
+    alert("Nao foi possivel localizar o agendamento para exclusao.");
+    return;
+  }
+
+  alert("O lapis ainda esta ligado ao fluxo antigo de encerramento. Vou trocar isso para abrir a edicao/cancelamento, preservando o historico.");
+  return;
+
+  if (!window.confirm(deleteConfirmMessage(item))) {
+    return;
+  }
+
+  button.disabled = true;
+
+  try {
+    const response = await fetch("/api/agendamentos/delete", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: item.id,
+        origem: item.origem,
+        osId: item.osId
+      })
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Nao foi possivel excluir o agendamento.");
+    }
+
+    alert(data.message || "Agendamento excluido com sucesso.");
+    await loadDashboard();
+  } catch (error) {
+    alert(error.message || "Nao foi possivel excluir o agendamento.");
+    button.disabled = false;
   }
 }
 
@@ -243,11 +338,61 @@ async function submitSchedule(event) {
   });
 
   const data = await response.json();
-  alert(data.message || "Operacao concluida.");
+  const reference = data.response?.os_id || data.response?.protocolo || data.response?.contratoId || "";
+  const message = reference ? `${data.message || "Operacao concluida."}\nReferencia: ${reference}` : (data.message || "Operacao concluida.");
+  alert(message);
   if (data.ok) {
     elements.scheduleForm.reset();
     elements.scheduleForm.elements.data.value = elements.startDateFilter.value || new Date().toISOString().slice(0, 10);
+    resetContractLookupState();
     await loadDashboard();
+  }
+}
+
+function fillScheduleFormFromContract(contract) {
+  if (contract.cliente) {
+    elements.scheduleForm.elements.cliente.value = contract.cliente;
+  }
+  if (contract.telefone) {
+    elements.scheduleForm.elements.telefone.value = contract.telefone;
+  }
+  if (contract.rota) {
+    elements.scheduleForm.elements.rota.value = contract.rota;
+  }
+  if (contract.endereco) {
+    elements.scheduleForm.elements.endereco.value = contract.endereco;
+  }
+}
+
+async function lookupContractAndFill() {
+  const contractId = elements.scheduleForm.elements.contrato.value.trim();
+  if (!contractId) {
+    resetContractLookupState();
+    return;
+  }
+
+  if (elements.scheduleForm.dataset.loadedContract === contractId) {
+    return;
+  }
+
+  elements.lookupContractButton.disabled = true;
+  setContractLookupStatus("Buscando contrato no SGP...");
+
+  try {
+    const response = await fetch(`/api/contrato?contrato=${encodeURIComponent(contractId)}`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Nao foi possivel consultar o contrato.");
+    }
+
+    fillScheduleFormFromContract(data.contract);
+    elements.scheduleForm.dataset.loadedContract = contractId;
+    setContractLookupStatus("Dados do contrato carregados do SGP.", "success");
+  } catch (error) {
+    elements.scheduleForm.dataset.loadedContract = "";
+    setContractLookupStatus(error.message, "error");
+  } finally {
+    elements.lookupContractButton.disabled = false;
   }
 }
 
@@ -260,6 +405,13 @@ function wireEvents() {
   elements.endDateFilter.addEventListener("change", loadDashboard);
   elements.searchFilter.addEventListener("input", debounce(loadDashboard, 250));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
+  elements.calendarGrid.addEventListener("click", handleCalendarGridClick);
+  elements.lookupContractButton.addEventListener("click", lookupContractAndFill);
+  elements.scheduleForm.elements.contrato.addEventListener("blur", lookupContractAndFill);
+  elements.scheduleForm.elements.contrato.addEventListener("input", () => {
+    elements.scheduleForm.dataset.loadedContract = "";
+    setContractLookupStatus("");
+  });
 }
 
 function navigateWeek(offsetDays) {
@@ -286,6 +438,7 @@ function init() {
   elements.startDateFilter.value = today;
   elements.endDateFilter.value = end.toISOString().slice(0, 10);
   elements.scheduleForm.elements.data.value = today;
+  resetContractLookupState();
   wireEvents();
   loadDashboard().catch((error) => {
     console.error(error);
