@@ -55,7 +55,7 @@ update_branch_safely() {
     exit 1
   fi
 
-  if [[ ! -x "$START_SCRIPT" ]]; then
+  if [[ ! -f "$START_SCRIPT" ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Script de reinicio nao encontrado em $START_SCRIPT"
     exit 1
   fi
@@ -66,7 +66,7 @@ update_branch_safely() {
   git checkout "$BRANCH"
   require_clean_worktree
   update_branch_safely
-  "$START_SCRIPT"
+  bash "$START_SCRIPT"
 
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Deploy concluido em $(git rev-parse --short HEAD)"
 } | tee -a "$LOG_FILE"

@@ -17,4 +17,4 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-"$BASE_DIR/garantir_dashboard_server.sh"
+bash "$BASE_DIR/garantir_dashboard_server.sh"

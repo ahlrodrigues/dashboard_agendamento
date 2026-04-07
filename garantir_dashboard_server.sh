@@ -7,10 +7,19 @@ cd "$BASE_DIR"
 HOST="${DASHBOARD_SERVER_HOST:-0.0.0.0}"
 PORT="${DASHBOARD_SERVER_PORT:-8780}"
 CHECK_HOST="${DASHBOARD_SERVER_CHECK_HOST:-127.0.0.1}"
-NODE_BIN="${DASHBOARD_NODE_BIN:-$(command -v node)}"
+NODE_BIN="${DASHBOARD_NODE_BIN:-}"
 SERVER_SCRIPT="${DASHBOARD_SERVER_SCRIPT:-$BASE_DIR/server.js}"
 LOG_FILE="${DASHBOARD_LOG_FILE:-$BASE_DIR/dashboard_server.log}"
 PID_FILE="${DASHBOARD_PID_FILE:-$BASE_DIR/dashboard_server.pid}"
+
+if [[ -z "$NODE_BIN" ]]; then
+  for candidate in "$(command -v node 2>/dev/null || true)" /usr/bin/node /usr/local/bin/node /bin/node; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      NODE_BIN="$candidate"
+      break
+    fi
+  done
+fi
 
 if [[ -z "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Node nao encontrado." >&2
