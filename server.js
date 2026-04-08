@@ -1190,13 +1190,14 @@ async function lookupOpenOsForContract(config, contractId) {
   try {
     const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
     const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
+    const normalizedContractId = String(contractId || "").trim();
     
     const allRows = [];
     for (const status of statuses) {
       const payload = {
         status,
         limit: 10,
-        contrato_id: contractId
+        contrato: normalizedContractId
       };
       try {
         const response = await postToSgp(config, endpoint, payload);
@@ -1211,7 +1212,14 @@ async function lookupOpenOsForContract(config, contractId) {
 
     if (!allRows.length) return [];
 
-    const uniqueRows = dedupeBy(allRows, row => String(row.id || row.os_id || ""));
+    const contractRows = allRows.filter((row) => {
+      const rowContractId = String(row.contrato || row.contrato_id || row.id_contrato || "").trim();
+      return rowContractId === normalizedContractId;
+    });
+
+    if (!contractRows.length) return [];
+
+    const uniqueRows = dedupeBy(contractRows, row => String(row.id || row.os_id || ""));
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
 
     return uniqueRows.slice(0, 3).map(raw => {
