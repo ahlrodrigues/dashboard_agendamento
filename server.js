@@ -403,7 +403,7 @@ function buildClientUrl(config, raw) {
 
   const osId = String(raw.os_id || raw.id || "").trim();
   if (osId) {
-    return `${baseUrl}/api/os/print/id/${encodeURIComponent(osId)}/`;
+    return `${baseUrl}/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
   }
 
   const clientId = pickClientId(raw);
@@ -984,12 +984,20 @@ async function getContractData(contractId) {
   }
 
   const config = loadConfig();
-  const contract = await lookupContract(config, normalizedContractId);
+  const [contract, openOses] = await Promise.all([
+    lookupContract(config, normalizedContractId),
+    lookupOpenOsForContract(config, normalizedContractId).catch(err => {
+      console.error("OS lookup falhou (nao critico):", err.message);
+      return [];
+    })
+  ]);
+
   return {
     statusCode: 200,
     body: {
       ok: true,
-      contract
+      contract,
+      openOses
     }
   };
 }
@@ -1169,3 +1177,62 @@ server.listen(PORT, HOST, () => {
   ensureDataDir();
   console.log(`Dashboard disponivel em http://${HOST}:${PORT}`);
 });
+
+
+function buildOsUrl(config, osId) {
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  if (!baseUrl || !osId) return "";
+  return `${baseUrl}/admin/atendimento/ocorrencia/os/${encodeURIComponent(String(osId).trim())}/edit/`;
+}
+
+
+async function lookupOpenOsForContract(config, contractId) {
+  try {
+    const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
+    const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
+    
+    const allRows = [];
+    for (const status of statuses) {
+      const payload = {
+        status,
+        limit: 10,
+        contrato_id: contractId
+      };
+      try {
+        const response = await postToSgp(config, endpoint, payload);
+        const chunk = extractListFromResponse(response);
+        if (Array.isArray(chunk)) {
+          allRows.push(...chunk);
+        }
+      } catch (err) {
+        console.error("Falha ao buscar OS com status " + status + ":", err.message);
+      }
+    }
+
+    if (!allRows.length) return [];
+
+    const uniqueRows = dedupeBy(allRows, row => String(row.id || row.os_id || ""));
+    uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
+
+    return uniqueRows.slice(0, 3).map(raw => {
+      const osId = String(raw.id || raw.os_id || "");
+      return {
+        osId,
+        protocolo:       String(raw.ocorrencia || raw.protocolo || raw.id || ""),
+        assunto:         String(raw.motivo || ""),
+        tipo:            String(raw.tipo || ""),
+        data_abertura:   String(raw.data_cadastro || ""),
+        hora_abertura:   String(raw.hora_cadastro || ""),
+        data_agendamento: String(raw.data_agendamento || ""),
+        status:          String(raw.status || ""),
+        pop:             String(raw.pop || ""),
+        responsavel:     String(raw.responsavel || ""),
+        descritivo:      String(raw.conteudo || "").substring(0, 200),
+        osUrl:           buildOsUrl(config, osId)
+      };
+    }).filter(x => x.osId);
+  } catch (error) {
+    console.error("Falha ao organizar OS abertas/pendentes:", error.message);
+    return [];
+  }
+}
