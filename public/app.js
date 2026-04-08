@@ -104,6 +104,7 @@ function renderNotices(notices) {
 
 function renderCalendar(grid) {
   const fragments = [];
+  elements.calendarGrid.style.setProperty("--calendar-day-count", String(grid.days.length || 7));
   fragments.push(`<div class="calendar-head">Horario</div>`);
   for (const day of grid.days) {
     fragments.push(`<div class="calendar-head">${day.label}</div>`);

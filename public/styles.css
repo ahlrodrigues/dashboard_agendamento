@@ -275,7 +275,7 @@ textarea:focus {
 
 .calendar-grid {
   display: grid;
-  grid-template-columns: 120px repeat(15, minmax(120px, 1fr));
+  grid-template-columns: 120px repeat(var(--calendar-day-count, 7), minmax(140px, 1fr));
   overflow: auto;
   border-radius: 20px;
   border: 1px solid var(--line);
@@ -599,6 +599,6 @@ tbody tr:hover {
 
 @media (max-width: 760px) {
   .shell { padding: 14px; }
-  .calendar-grid { grid-template-columns: 80px repeat(15, 180px); }
+  .calendar-grid { grid-template-columns: 80px repeat(var(--calendar-day-count, 7), 180px); }
   .hero, .panel-header { flex-direction: column; align-items: flex-start; }
 }
