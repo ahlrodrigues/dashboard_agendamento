@@ -182,6 +182,34 @@ function extractListFromResponse(data) {
   );
 }
 
+function getSgpMutationError(data) {
+  if (typeof data === "number") {
+    return data >= 400 ? `SGP retornou codigo ${data}.` : "";
+  }
+
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+
+  if (data.ok === false) {
+    return data.message || data.msg || data.detail || "SGP retornou falha na operacao.";
+  }
+
+  if (typeof data.status === "number" && data.status >= 400) {
+    return data.message || data.msg || data.detail || `SGP retornou status ${data.status}.`;
+  }
+
+  if (typeof data.code === "number" && data.code >= 400) {
+    return data.message || data.msg || data.detail || `SGP retornou codigo ${data.code}.`;
+  }
+
+  if (typeof data.response === "number" && data.response >= 400) {
+    return data.message || data.msg || data.detail || `SGP retornou codigo ${data.response}.`;
+  }
+
+  return "";
+}
+
 async function listServiceOrders(config, { startDate, endDate }) {
   const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
   const statuses = Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
@@ -1120,6 +1148,19 @@ async function updateSchedule(payload) {
       payload: sgpPayload,
       response
     });
+
+    const mutationError = getSgpMutationError(response);
+    if (mutationError) {
+      return {
+        statusCode: 502,
+        body: {
+          ok: false,
+          mode: "sgp",
+          message: `Falha ao atualizar agendamento no SGP: ${mutationError}`,
+          response
+        }
+      };
+    }
 
     return {
       statusCode: 200,
