@@ -206,7 +206,7 @@ function setScheduleFormMode(mode) {
     elements.scheduleFormTitle.textContent = editing ? "Editar Agendamento" : "Novo Agendamento";
   }
   if (elements.scheduleSubmitButton) {
-    elements.scheduleSubmitButton.textContent = editing ? "Salvar Alteracoes" : "Criar no SGP";
+    elements.scheduleSubmitButton.textContent = "Salvar";
   }
   if (elements.cancelEditButton) {
     elements.cancelEditButton.style.display = editing ? "" : "none";
@@ -540,10 +540,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
       if (os.tipo) meta.push(os.tipo);
       if (os.data_abertura) {
         const d = os.data_abertura.substring(0, 10).split("-").reverse().join("/");
-        const h = os.hora_abertura ? ` ${os.hora_abertura.substring(0, 5)}` : "";
-        meta.push(`Aberta: ${d}${h}`);
+        meta.push(`Aberta: ${d}`);
       }
-      if (os.status) meta.push(os.status);
+      if (os.status) meta.push(`Status: ${os.status}`);
       if (meta.length > 0) {
         const detail = document.createElement("span");
         detail.className = "os-detail";
@@ -557,7 +556,10 @@ function fillScheduleFormFromContract(contract, openOses = []) {
       if (os.pop) extra.push(`📍 ${os.pop}`);
       if (os.data_agendamento && os.data_agendamento !== "0000-00-00") {
         const da = os.data_agendamento.substring(0, 10).split("-").reverse().join("/");
-        extra.push(`📅 ${da}`);
+        const ha = os.hora_agendamento && os.hora_agendamento !== "00:00:00"
+          ? ` ${os.hora_agendamento.substring(0, 5)}`
+          : "";
+        extra.push(`📅 ${da}${ha}`);
       }
       if (extra.length > 0) {
         const extraEl = document.createElement("span");
@@ -587,9 +589,13 @@ function fillScheduleFormFromContract(contract, openOses = []) {
           f.data.value = os.data_agendamento.substring(0, 10);
         }
 
-        // Horário (da hora_abertura da OS, se não houver hora_agendamento)
-        if (os.hora_abertura && f.horario) {
-          f.horario.value = os.hora_abertura.substring(0, 5);
+        // Horário do agendamento; se não existir, usa a hora de abertura como fallback visual
+        if (f.horario) {
+          if (os.hora_agendamento && os.hora_agendamento !== "00:00:00") {
+            f.horario.value = os.hora_agendamento.substring(0, 5);
+          } else if (os.hora_abertura) {
+            f.horario.value = os.hora_abertura.substring(0, 5);
+          }
         }
 
         // Observação → apenas o descritivo da OS (limpo)

@@ -77,13 +77,30 @@ function buildAuthHeaders(config) {
 }
 
 function buildBasePayload(config) {
-  if (String(config.auth_mode || "").toLowerCase() !== "app_token") {
+  const app = String(config.app_token_auth?.app || "").trim();
+  const token = String(config.app_token_auth?.token || "").trim();
+  if (!app || !token) {
     return {};
   }
   return {
-    app: config.app_token_auth?.app || "",
-    token: config.app_token_auth?.token || ""
+    app,
+    token
   };
+}
+
+function hasAppTokenAuth(config) {
+  return Boolean(
+    String(config.app_token_auth?.app || "").trim() &&
+    String(config.app_token_auth?.token || "").trim()
+  );
+}
+
+function logSgpScheduleUpdate(stage, details) {
+  try {
+    console.log(`[SGP_UPDATE] ${stage} ${JSON.stringify(details)}`);
+  } catch (error) {
+    console.log(`[SGP_UPDATE] ${stage}`);
+  }
 }
 
 async function postToSgp(config, endpointPath, payload) {
@@ -887,10 +904,7 @@ async function postJsonToSgp(config, endpointPath, payload) {
 }
 
 async function closeSgpSchedule(config, osId) {
-  const app = String(config.app_token_auth?.app || "").trim();
-  const token = String(config.app_token_auth?.token || "").trim();
-
-  if (String(config.auth_mode || "").toLowerCase() === "app_token" && app && token) {
+  if (hasAppTokenAuth(config)) {
     const endpoint = `/api/central/chamado/update/${encodeURIComponent(String(osId || "").trim())}/`;
     return {
       mode: "central_chamado_update",
@@ -1064,13 +1078,47 @@ async function updateSchedule(payload) {
     }
 
     const config = loadConfig();
-    const endpoint = `/api/os/update/id/${encodeURIComponent(osId)}/`;
-    const response = await postToSgp(config, endpoint, {
+    if (!hasAppTokenAuth(config)) {
+      return {
+        statusCode: 501,
+        body: {
+          ok: false,
+          message: "A configuracao atual do SGP nao permite alterar data/horario de OS aberta. Preencha app_token_auth.app e app_token_auth.token com valores validos."
+        }
+      };
+    }
+
+    const endpoint = `/api/central/chamado/update/${encodeURIComponent(osId)}/`;
+    const sgpPayload = {
       os_data_agendamento: toScheduledDateTime(entry.data, entry.horario),
-      observacao: entry.observacao,
-      responsavel: entry.tecnico,
-      contato_nome: entry.cliente,
-      contato_telefone: entry.telefone
+      os_observacao: entry.observacao,
+      os_tecnico_responsavel: entry.tecnico
+    };
+
+    logSgpScheduleUpdate("request", {
+      osId,
+      endpoint,
+      payload: sgpPayload
+    });
+
+    let response;
+    try {
+      response = await postToSgp(config, endpoint, sgpPayload);
+    } catch (error) {
+      logSgpScheduleUpdate("error", {
+        osId,
+        endpoint,
+        payload: sgpPayload,
+        error: error.message
+      });
+      throw error;
+    }
+
+    logSgpScheduleUpdate("response", {
+      osId,
+      endpoint,
+      payload: sgpPayload,
+      response
     });
 
     return {
@@ -1361,6 +1409,7 @@ async function lookupOpenOsForContract(config, contractId) {
         data_abertura:   String(raw.data_cadastro || ""),
         hora_abertura:   String(raw.hora_cadastro || ""),
         data_agendamento: String(raw.data_agendamento || ""),
+        hora_agendamento: String(raw.hora_agendamento || ""),
         status:          String(raw.status || ""),
         pop:             String(raw.pop || ""),
         responsavel:     String(raw.responsavel || ""),

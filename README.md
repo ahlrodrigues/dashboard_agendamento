@@ -43,6 +43,10 @@ Exemplo:
     "username": "SEU_USUARIO",
     "password": "SUA_SENHA"
   },
+  "app_token_auth": {
+    "app": "SEU_APP",
+    "token": "SEU_TOKEN"
+  },
   "dashboard": {
     "atualizacao_segundos": 300,
     "janela_dias_passado": 7,
@@ -58,6 +62,11 @@ Exemplo:
   }
 }
 ```
+
+Observacao:
+
+- o projeto pode continuar usando `basic_auth` para leitura normal
+- para alterar data/horario de OS aberta no SGP, preencha tambem `app_token_auth.app` e `app_token_auth.token`
 
 ## Como executar
 
