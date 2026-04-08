@@ -26,6 +26,9 @@ const elements = {
   writeModeBadge: document.querySelector("#writeModeBadge"),
   noticeArea: document.querySelector("#noticeArea"),
   scheduleForm: document.querySelector("#scheduleForm"),
+  scheduleFormTitle: document.querySelector("#scheduleFormTitle"),
+  scheduleSubmitButton: document.querySelector("#scheduleSubmitButton"),
+  cancelEditButton: document.querySelector("#cancelEditButton"),
   lookupContractButton: document.querySelector("#lookupContractButton"),
   contractLookupStatus: document.querySelector("#contractLookupStatus"),
   scheduleModal: document.querySelector("#scheduleModal"),
@@ -189,11 +192,57 @@ function resetContractLookupState() {
     elements.osLookupList.innerHTML = "";
   }
   if (elements.scheduleForm.elements.osId) {
-    const input = document.createElement("input");
-    input.name = "protocolo";
-    input.type = "text";
-    elements.scheduleForm.elements.osId.replaceWith(input);
+    elements.scheduleForm.elements.osId.value = "";
   }
+}
+
+function isEditingSchedule() {
+  return Boolean(String(elements.scheduleForm.elements.id?.value || "").trim());
+}
+
+function setScheduleFormMode(mode) {
+  const editing = mode === "edit";
+  if (elements.scheduleFormTitle) {
+    elements.scheduleFormTitle.textContent = editing ? "Editar Agendamento" : "Novo Agendamento";
+  }
+  if (elements.scheduleSubmitButton) {
+    elements.scheduleSubmitButton.textContent = editing ? "Salvar Alteracoes" : "Criar no SGP";
+  }
+  if (elements.cancelEditButton) {
+    elements.cancelEditButton.style.display = editing ? "" : "none";
+  }
+}
+
+function fillScheduleFormFromSchedule(item) {
+  const form = elements.scheduleForm.elements;
+  form.id.value = item.id || "";
+  form.osId.value = item.osId || "";
+  form.origem.value = item.origem || "";
+  form.cliente.value = item.cliente || "";
+  form.contrato.value = item.contrato || "";
+  form.telefone.value = item.telefone || "";
+  form.protocolo.value = item.protocolo || item.osId || "";
+  form.rota.value = item.rota || "";
+  form.tecnico.value = item.tecnico && item.tecnico !== "A definir" ? item.tecnico : "";
+  form.data.value = item.data || "";
+  form.horario.value = item.horario && item.horario !== "A definir" ? item.horario : "";
+  form.endereco.value = item.endereco || "";
+  form.observacao.value = item.observacao || "";
+  elements.scheduleForm.dataset.loadedContract = item.contrato || "";
+  setContractLookupStatus("Agendamento carregado para edicao.", "success");
+  setScheduleFormMode("edit");
+  elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function resetScheduleForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  elements.scheduleForm.reset();
+  elements.scheduleForm.elements.id.value = "";
+  elements.scheduleForm.elements.osId.value = "";
+  elements.scheduleForm.elements.origem.value = "";
+  elements.scheduleForm.elements.data.value = elements.startDateFilter.value || today;
+  resetContractLookupState();
+  setScheduleFormMode("create");
 }
 
 function statusLabel(status) {
@@ -269,6 +318,9 @@ async function loadDashboard() {
 
   const response = await fetch(`/api/dashboard-data?${params.toString()}`);
   const data = await response.json();
+  if (!response.ok || !data.ok) {
+    throw new Error(data.message || "Nao foi possivel atualizar o dashboard.");
+  }
   state.data = data;
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
 
@@ -286,6 +338,25 @@ async function loadDashboard() {
   }
 }
 
+async function refreshDashboard() {
+  if (elements.refreshButton) {
+    elements.refreshButton.disabled = true;
+    elements.refreshButton.textContent = "Atualizando...";
+  }
+
+  try {
+    await loadDashboard();
+  } catch (error) {
+    console.error(error);
+    elements.noticeArea.innerHTML = `<div class="notice">Falha ao atualizar o dashboard: ${escapeHtml(error.message)}</div>`;
+  } finally {
+    if (elements.refreshButton) {
+      elements.refreshButton.disabled = false;
+      elements.refreshButton.textContent = "Atualizar";
+    }
+  }
+}
+
 async function handleCalendarGridClick(event) {
   const button = event.target.closest(".chip-delete-button");
   if (!button) {
@@ -299,20 +370,7 @@ async function handleCalendarGridClick(event) {
     return;
   }
 
-  elements.editScheduleForm.elements.id.value = item.id;
-  elements.editScheduleForm.elements.osId.value = item.osId || "";
-  elements.editScheduleForm.elements.origem.value = item.origem || "";
-  elements.editScheduleForm.elements.setor.value = item.setor || "";
-  elements.editScheduleForm.elements.tipo.value = item.tipo || "";
-  elements.editScheduleForm.elements.motivo.value = item.motivo || "";
-  elements.editScheduleForm.elements.prioridade.value = item.prioridade || "";
-  elements.editScheduleForm.elements.data.value = item.data;
-  elements.editScheduleForm.elements.horario.value = item.horario === "A definir" ? "" : item.horario;
-  elements.editScheduleForm.elements.observacao.value = item.observacao || "";
-
-  elements.cancelScheduleForm.reset();
-
-  elements.scheduleModal.showModal();
+  fillScheduleFormFromSchedule(item);
 }
 
 async function submitEditSchedule(event) {
@@ -375,24 +433,38 @@ async function submitSchedule(event) {
   event.preventDefault();
   const formData = new FormData(elements.scheduleForm);
   const payload = Object.fromEntries(formData.entries());
+  const editing = isEditingSchedule();
+  const endpoint = editing ? "/api/agendamentos/edit" : "/api/agendamentos";
+  const button = elements.scheduleSubmitButton || elements.scheduleForm.querySelector("button[type=submit]");
+  if (button) {
+    button.disabled = true;
+  }
 
-  const response = await fetch("/api/agendamentos", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
 
-  const data = await response.json();
-  const reference = data.response?.os_id || data.response?.protocolo || data.response?.contratoId || "";
-  const message = reference ? `${data.message || "Operacao concluida."}\nReferencia: ${reference}` : (data.message || "Operacao concluida.");
-  alert(message);
-  if (data.ok) {
-    elements.scheduleForm.reset();
-    elements.scheduleForm.elements.data.value = elements.startDateFilter.value || new Date().toISOString().slice(0, 10);
-    resetContractLookupState();
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Falha ao salvar agendamento.");
+    }
+
+    const reference = data.response?.os_id || data.response?.protocolo || data.response?.contratoId || payload.protocolo || payload.osId || "";
+    const message = reference ? `${data.message || "Operacao concluida."}\nReferencia: ${reference}` : (data.message || "Operacao concluida.");
+    alert(message);
+    resetScheduleForm();
     await loadDashboard();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
   }
 }
 
@@ -502,6 +574,7 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 
         // Protocolo / Ordem de Serviço
         if (f.protocolo) f.protocolo.value = os.osId;
+        if (f.osId) f.osId.value = os.osId;
 
         // POP → campo "rota"
         if (os.pop && f.rota) f.rota.value = os.pop;
@@ -544,10 +617,7 @@ function fillScheduleFormFromContract(contract, openOses = []) {
     }
   } else {
     if (elements.scheduleForm.elements.osId) {
-      const input = document.createElement("input");
-      input.name = "protocolo";
-      input.type = "text";
-      elements.scheduleForm.elements.osId.replaceWith(input);
+      elements.scheduleForm.elements.osId.value = "";
     }
   }
 }
@@ -585,16 +655,19 @@ async function lookupContractAndFill() {
 }
 
 function wireEvents() {
-  elements.refreshButton.addEventListener("click", loadDashboard);
+  elements.refreshButton.addEventListener("click", refreshDashboard);
   elements.prevWeekButton.addEventListener("click", () => navigateWeek(-7));
   elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
-  elements.statusFilter.addEventListener("change", loadDashboard);
-  elements.startDateFilter.addEventListener("change", loadDashboard);
-  elements.endDateFilter.addEventListener("change", loadDashboard);
-  elements.searchFilter.addEventListener("input", debounce(loadDashboard, 250));
+  elements.statusFilter.addEventListener("change", refreshDashboard);
+  elements.startDateFilter.addEventListener("change", refreshDashboard);
+  elements.endDateFilter.addEventListener("change", refreshDashboard);
+  elements.searchFilter.addEventListener("input", debounce(refreshDashboard, 250));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
   elements.calendarGrid.addEventListener("click", handleCalendarGridClick);
   elements.lookupContractButton.addEventListener("click", lookupContractAndFill);
+  if (elements.cancelEditButton) {
+    elements.cancelEditButton.addEventListener("click", resetScheduleForm);
+  }
   elements.scheduleForm.elements.contrato.addEventListener("blur", lookupContractAndFill);
   elements.scheduleForm.elements.contrato.addEventListener("input", () => {
     elements.scheduleForm.dataset.loadedContract = "";
@@ -630,7 +703,7 @@ function navigateWeek(offsetDays) {
   }
   elements.startDateFilter.value = shiftDate(elements.startDateFilter.value, offsetDays);
   elements.endDateFilter.value = shiftDate(elements.endDateFilter.value, offsetDays);
-  loadDashboard();
+  refreshDashboard();
 }
 
 function debounce(fn, wait) {
@@ -647,10 +720,9 @@ function init() {
   end.setDate(end.getDate() + 14);
   elements.startDateFilter.value = today;
   elements.endDateFilter.value = end.toISOString().slice(0, 10);
-  elements.scheduleForm.elements.data.value = today;
-  resetContractLookupState();
+  resetScheduleForm();
   wireEvents();
-  loadDashboard().catch((error) => {
+  refreshDashboard().catch((error) => {
     console.error(error);
     elements.noticeArea.innerHTML = `<div class="notice">Falha ao carregar o dashboard: ${error.message}</div>`;
   });

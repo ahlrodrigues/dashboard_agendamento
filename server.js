@@ -274,6 +274,29 @@ function saveManualSchedule(entry) {
   return entry;
 }
 
+function updateManualSchedule(entryId, nextEntry) {
+  const rows = readManualSchedules();
+  let updated = null;
+  const nextRows = rows.map((item) => {
+    if (String(item.id || "") !== String(entryId || "")) {
+      return item;
+    }
+    updated = {
+      ...item,
+      ...nextEntry,
+      id: item.id || entryId
+    };
+    return updated;
+  });
+
+  if (!updated) {
+    return null;
+  }
+
+  writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  return updated;
+}
+
 function deleteManualSchedule(entryId) {
   const rows = readManualSchedules();
   const nextRows = rows.filter((item) => String(item.id || "") !== String(entryId || ""));
@@ -971,6 +994,105 @@ async function createSchedule(payload) {
   };
 }
 
+async function updateSchedule(payload) {
+  const id = String(payload.id || "").trim();
+  const origem = String(payload.origem || "").trim();
+  const osId = String(payload.osId || "").trim();
+  const entry = {
+    cliente: String(payload.cliente || "").trim(),
+    contrato: String(payload.contrato || "").trim(),
+    telefone: String(payload.telefone || "").trim(),
+    protocolo: String(payload.protocolo || "").trim(),
+    rota: String(payload.rota || "").trim(),
+    tecnico: String(payload.tecnico || "").trim(),
+    data: isoDateOnly(payload.data),
+    horario: hhmm(payload.horario),
+    endereco: String(payload.endereco || "").trim(),
+    observacao: String(payload.observacao || "").trim()
+  };
+
+  if (!id) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Agendamento nao informado."
+      }
+    };
+  }
+
+  if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Informe pelo menos cliente, contrato, data e horario."
+      }
+    };
+  }
+
+  if (origem === "pre_agendamento_local") {
+    const updated = updateManualSchedule(id, entry);
+    return updated
+      ? {
+          statusCode: 200,
+          body: {
+            ok: true,
+            mode: "local",
+            message: "Pre-agendamento local atualizado com sucesso.",
+            schedule: updated
+          }
+        }
+      : {
+          statusCode: 404,
+          body: {
+            ok: false,
+            message: "Agendamento local nao encontrado."
+          }
+        };
+  }
+
+  if (origem === "sgp") {
+    if (!osId) {
+      return {
+        statusCode: 400,
+        body: {
+          ok: false,
+          message: "OS do agendamento nao identificada para edicao no SGP."
+        }
+      };
+    }
+
+    const config = loadConfig();
+    const endpoint = `/api/os/update/id/${encodeURIComponent(osId)}/`;
+    const response = await postToSgp(config, endpoint, {
+      os_data_agendamento: toScheduledDateTime(entry.data, entry.horario),
+      observacao: entry.observacao,
+      responsavel: entry.tecnico,
+      contato_nome: entry.cliente,
+      contato_telefone: entry.telefone
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        mode: "sgp",
+        message: "Agendamento atualizado no SGP com sucesso.",
+        response
+      }
+    };
+  }
+
+  return {
+    statusCode: 400,
+    body: {
+      ok: false,
+      message: "Origem do agendamento nao suportada para edicao."
+    }
+  };
+}
+
 async function getContractData(contractId) {
   const normalizedContractId = String(contractId || "").trim();
   if (!normalizedContractId) {
@@ -1151,6 +1273,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
       const payload = await collectRequestBody(req);
       const result = await createSchedule(payload);
+      sendJson(res, result.statusCode, result.body);
+      return;
+    }
+
+    if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/edit") {
+      const payload = await collectRequestBody(req);
+      const result = await updateSchedule(payload);
       sendJson(res, result.statusCode, result.body);
       return;
     }

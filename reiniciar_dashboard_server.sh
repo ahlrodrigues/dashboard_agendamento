@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="${DASHBOARD_BASE_DIR:-/var/www/html/dashboard_agendamento-live}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="${DASHBOARD_BASE_DIR:-$SCRIPT_DIR}"
 cd "$BASE_DIR"
 
 LOG_FILE="${DASHBOARD_LOG_FILE:-$BASE_DIR/dashboard_server.log}"

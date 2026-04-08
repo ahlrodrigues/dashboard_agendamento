@@ -54,11 +54,15 @@
 
       <section class="panel">
         <div class="panel-header">
-          <h2>Novo Agendamento</h2>
+          <h2 id="scheduleFormTitle">Novo Agendamento</h2>
           <span id="writeModeBadge" class="badge neutral">Carregando</span>
         </div>
 
         <form id="scheduleForm" class="stack-form">
+          <input name="id" type="hidden" />
+          <input name="osId" type="hidden" />
+          <input name="origem" type="hidden" />
+
           <label class="field">
             <span>Cliente</span>
             <input name="cliente" type="text" required />
@@ -116,7 +120,10 @@
             <textarea name="observacao" rows="3"></textarea>
           </label>
 
-          <button class="primary-button" type="submit">Criar no SGP</button>
+          <div class="modal-actions">
+            <button id="scheduleSubmitButton" class="primary-button" type="submit">Criar no SGP</button>
+            <button id="cancelEditButton" class="ghost-button" type="button" style="display: none;">Cancelar edicao</button>
+          </div>
         </form>
       </section>
     </aside>

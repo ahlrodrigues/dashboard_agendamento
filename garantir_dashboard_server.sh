@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="${DASHBOARD_BASE_DIR:-/var/www/html/dashboard_agendamento-live}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="${DASHBOARD_BASE_DIR:-$SCRIPT_DIR}"
 cd "$BASE_DIR"
 
 HOST="${DASHBOARD_SERVER_HOST:-0.0.0.0}"
@@ -50,7 +51,7 @@ if [[ "$(port_is_active)" == "1" ]]; then
 fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando servidor em ${HOST}:${PORT}" >> "$LOG_FILE"
-nohup env HOST="$HOST" PORT="$PORT" "$NODE_BIN" "$SERVER_SCRIPT" >> "$LOG_FILE" 2>&1 &
+setsid env HOST="$HOST" PORT="$PORT" "$NODE_BIN" "$SERVER_SCRIPT" >> "$LOG_FILE" 2>&1 < /dev/null &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$PID_FILE"
 
