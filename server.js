@@ -103,6 +103,205 @@ function logSgpScheduleUpdate(stage, details) {
   }
 }
 
+function splitSetCookieHeader(value) {
+  if (!value) {
+    return [];
+  }
+  return Array.isArray(value) ? value : String(value).split(/,(?=[^;]+?=)/);
+}
+
+function mergeCookieHeaders(...cookieSources) {
+  const entries = new Map();
+  for (const source of cookieSources) {
+    for (const raw of splitSetCookieHeader(source)) {
+      const pair = String(raw || "").split(";")[0].trim();
+      if (!pair) {
+        continue;
+      }
+      const eq = pair.indexOf("=");
+      const key = eq >= 0 ? pair.slice(0, eq) : pair;
+      entries.set(key, pair);
+    }
+  }
+  return Array.from(entries.values()).join("; ");
+}
+
+function extractHtmlFieldValue(html, name) {
+  const safeName = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const input = html.match(new RegExp(`<input[^>]*name=['"]${safeName}['"][^>]*value=['"]([^'"]*)['"][^>]*>`, "i"));
+  if (input) {
+    return input[1];
+  }
+
+  const textarea = html.match(new RegExp(`<textarea[^>]*name=['"]${safeName}['"][^>]*>([\\s\\S]*?)<\\/textarea>`, "i"));
+  if (textarea) {
+    return textarea[1];
+  }
+
+  const select = html.match(new RegExp(`<select[^>]*name=['"]${safeName}['"][^>]*>([\\s\\S]*?)<\\/select>`, "i"));
+  if (select) {
+    const options = [...select[1].matchAll(/<option([^>]*)value=['"]([^'"]*)['"]([^>]*)>/gi)];
+    const selected = options.find((match) => /selected/i.test(`${match[1]} ${match[3]}`));
+    return selected ? selected[2] : "";
+  }
+
+  return "";
+}
+
+function htmlFieldChecked(html, name) {
+  const safeName = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const input = html.match(new RegExp(`<input[^>]*name=['"]${safeName}['"][^>]*>`, "i"));
+  return Boolean(input && /checked/i.test(input[0]));
+}
+
+function toBrazilDateTime(date, time) {
+  const isoDate = isoDateOnly(date);
+  const normalizedTime = String(time || "").trim();
+  const fullTime = /^\d{2}:\d{2}:\d{2}$/.test(normalizedTime)
+    ? normalizedTime
+    : /^\d{2}:\d{2}$/.test(normalizedTime)
+      ? `${normalizedTime}:00`
+      : "";
+  if (!isoDate || !fullTime) {
+    return "";
+  }
+  const [year, month, day] = isoDate.split("-");
+  return `${day}/${month}/${year} ${fullTime}`;
+}
+
+async function createSgpWebSession(config) {
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  const username = String(config.basic_auth?.username || "").trim();
+  const password = String(config.basic_auth?.password || "").trim();
+  if (!baseUrl || !username || !password) {
+    throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
+  }
+
+  const loginUrl = `${baseUrl}/accounts/login/`;
+  const loginPage = await fetch(loginUrl, {
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  const loginHtml = await loginPage.text();
+  const loginCsrf = extractHtmlFieldValue(loginHtml, "csrfmiddlewaretoken");
+  const loginCookies = mergeCookieHeaders(
+    loginPage.headers.getSetCookie?.(),
+    loginPage.headers.get("set-cookie")
+  );
+  if (!loginCsrf) {
+    throw new Error("Nao foi possivel obter CSRF da tela de login do SGP.");
+  }
+
+  const body = new URLSearchParams({
+    csrfmiddlewaretoken: loginCsrf,
+    username,
+    password,
+    next: "/"
+  });
+  const loginResponse = await fetch(loginUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: loginCookies,
+      Referer: loginUrl
+    },
+    body,
+    redirect: "manual",
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  const sessionCookies = mergeCookieHeaders(
+    loginCookies,
+    loginResponse.headers.getSetCookie?.(),
+    loginResponse.headers.get("set-cookie")
+  );
+  if (!sessionCookies.includes("sessionid=")) {
+    throw new Error("Falha ao autenticar na interface web do SGP.");
+  }
+  return {
+    baseUrl,
+    cookies: sessionCookies
+  };
+}
+
+async function fetchSgpOsEditForm(config, session, osId) {
+  const editUrl = `${session.baseUrl}/admin/atendimento/ocorrencia/os/${encodeURIComponent(String(osId).trim())}/edit/`;
+  const response = await fetch(editUrl, {
+    headers: {
+      Cookie: session.cookies
+    },
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  const html = await response.text();
+  if (!response.ok || !/name=['"]data_agendamento['"]/i.test(html)) {
+    throw new Error("Nao foi possivel abrir o formulario web da OS no SGP.");
+  }
+  return {
+    url: editUrl,
+    html
+  };
+}
+
+async function updateScheduleViaSgpWebForm(config, osId, entry) {
+  const session = await createSgpWebSession(config);
+  const form = await fetchSgpOsEditForm(config, session, osId);
+  const html = form.html;
+  const payload = {
+    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
+    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
+    setor: extractHtmlFieldValue(html, "setor") || "1",
+    tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
+    motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
+    prioridade: extractHtmlFieldValue(html, "prioridade") || "2",
+    data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+    data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
+    data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
+    responsavel: hasMeaningfulTechnician(entry.tecnico)
+      ? entry.tecnico
+      : extractHtmlFieldValue(html, "responsavel"),
+    conteudo: extractHtmlFieldValue(html, "conteudo"),
+    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
+    observacao: entry.observacao || extractHtmlFieldValue(html, "observacao"),
+    anotacao: extractHtmlFieldValue(html, "anotacao"),
+    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
+    status: extractHtmlFieldValue(html, "status") || "0",
+    veiculo: extractHtmlFieldValue(html, "veiculo"),
+    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
+    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
+    data_checkin: extractHtmlFieldValue(html, "data_checkin"),
+    gateway_sms: extractHtmlFieldValue(html, "gateway_sms")
+  };
+  if (htmlFieldChecked(html, "sms_tecnico")) {
+    payload.sms_tecnico = "on";
+  }
+  if (htmlFieldChecked(html, "encerra_ocorrencia")) {
+    payload.encerra_ocorrencia = "on";
+  }
+
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(payload)) {
+    body.append(key, String(value ?? ""));
+  }
+
+  const response = await fetch(form.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: session.cookies,
+      Referer: form.url
+    },
+    body,
+    redirect: "manual",
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  return {
+    endpoint: form.url,
+    payload,
+    status: response.status,
+    location: response.headers.get("location") || ""
+  };
+}
+
 async function postToSgp(config, endpointPath, payload) {
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   if (!baseUrl) {
@@ -246,6 +445,39 @@ async function listServiceOrders(config, { startDate, endDate }) {
   return dedupeBy(results, (item) => String(item.id || item.os_id || item.pk || JSON.stringify(item)));
 }
 
+async function fetchServiceOrderById(config, osId) {
+  const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
+  const statuses = Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
+    ? config.agendamento.statuses_consulta
+    : DEFAULT_STATUSES;
+  const normalizedOsId = String(osId || "").trim();
+
+  for (const status of statuses) {
+    let offset = 0;
+    const limit = 500;
+    while (true) {
+      const payload = { status, offset, limit };
+      const response = await postToSgp(config, endpoint, payload);
+      const chunk = extractListFromResponse(response);
+      if (!Array.isArray(chunk)) {
+        throw new Error("Formato inesperado na busca da OS por ID.");
+      }
+
+      const found = chunk.find((item) => String(item.id || item.os_id || "").trim() === normalizedOsId);
+      if (found) {
+        return found;
+      }
+
+      if (chunk.length < limit) {
+        break;
+      }
+      offset += limit;
+    }
+  }
+
+  return null;
+}
+
 async function lookupContract(config, contractId) {
   const endpoint = String(config.agendamento?.endpoint_contrato || "/api/suporte/contrato/list/").trim();
   if (!endpoint) {
@@ -352,6 +584,46 @@ function deleteManualSchedule(entryId) {
   return true;
 }
 
+function removeManualSchedulesByMatcher(matcher) {
+  const rows = readManualSchedules();
+  const nextRows = rows.filter((item) => !matcher(item));
+  if (nextRows.length === rows.length) {
+    return 0;
+  }
+  writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  return rows.length - nextRows.length;
+}
+
+function filterDuplicatedManualSchedules(sgpSchedules, manualSchedules) {
+  const sgpRefs = new Set();
+  for (const item of sgpSchedules) {
+    if (item.origem !== "sgp") {
+      continue;
+    }
+    const osId = String(item.osId || "").trim();
+    const protocolo = String(item.protocolo || "").trim();
+    if (osId) {
+      sgpRefs.add(`os:${osId}`);
+      sgpRefs.add(`protocolo:${osId}`);
+    }
+    if (protocolo) {
+      sgpRefs.add(`protocolo:${protocolo}`);
+      sgpRefs.add(`os:${protocolo}`);
+    }
+  }
+
+  return manualSchedules.filter((item) => {
+    const osId = String(item.osId || "").trim();
+    const protocolo = String(item.protocolo || "").trim();
+    return !(
+      (osId && sgpRefs.has(`os:${osId}`)) ||
+      (osId && sgpRefs.has(`protocolo:${osId}`)) ||
+      (protocolo && sgpRefs.has(`protocolo:${protocolo}`)) ||
+      (protocolo && sgpRefs.has(`os:${protocolo}`))
+    );
+  });
+}
+
 function isoDateOnly(value) {
   if (!value) {
     return "";
@@ -449,6 +721,14 @@ function normalizeTechnician(raw) {
     raw.responsavel ||
     "Nao definido"
   );
+}
+
+function hasMeaningfulTechnician(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return !new Set(["nao definido", "não definido", "a definir", "-"]).has(normalized);
 }
 
 function pickClientId(raw) {
@@ -803,7 +1083,10 @@ async function getDashboardData(query) {
     schedules = buildMockSchedules(selectedDate, slots);
   }
 
-  const manualSchedules = readManualSchedules().map(normalizeManualSchedule);
+  const manualSchedules = filterDuplicatedManualSchedules(
+    schedules,
+    readManualSchedules().map(normalizeManualSchedule)
+  );
   schedules = schedules.concat(manualSchedules);
   schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
@@ -843,7 +1126,7 @@ function toScheduledDateTime(date, time) {
   if (!date || !time || time === "A definir") {
     return "";
   }
-  return `${date} ${time.slice(0, 5)}`;
+  return `${date} ${time.slice(0, 5)}:00`;
 }
 
 function currentDateTimeForSgp() {
@@ -1106,32 +1389,28 @@ async function updateSchedule(payload) {
     }
 
     const config = loadConfig();
-    if (!hasAppTokenAuth(config)) {
+    if (!String(config.basic_auth?.username || "").trim() || !String(config.basic_auth?.password || "").trim()) {
       return {
         statusCode: 501,
         body: {
           ok: false,
-          message: "A configuracao atual do SGP nao permite alterar data/horario de OS aberta. Preencha app_token_auth.app e app_token_auth.token com valores validos."
+          message: "A configuracao atual do SGP nao permite alterar data/horario de OS aberta pela interface web. Preencha basic_auth.username e basic_auth.password com valores validos."
         }
       };
     }
 
-    const endpoint = `/api/central/chamado/update/${encodeURIComponent(osId)}/`;
+    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
     const sgpPayload = {
-      os_data_agendamento: toScheduledDateTime(entry.data, entry.horario),
-      os_observacao: entry.observacao,
-      os_tecnico_responsavel: entry.tecnico
+      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+      observacao: entry.observacao || "",
+      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
     };
 
-    logSgpScheduleUpdate("request", {
-      osId,
-      endpoint,
-      payload: sgpPayload
-    });
+    logSgpScheduleUpdate("request", { osId, endpoint, payload: sgpPayload });
 
     let response;
     try {
-      response = await postToSgp(config, endpoint, sgpPayload);
+      response = await updateScheduleViaSgpWebForm(config, osId, entry);
     } catch (error) {
       logSgpScheduleUpdate("error", {
         osId,
@@ -1144,8 +1423,8 @@ async function updateSchedule(payload) {
 
     logSgpScheduleUpdate("response", {
       osId,
-      endpoint,
-      payload: sgpPayload,
+      endpoint: response.endpoint || endpoint,
+      payload: response.payload || sgpPayload,
       response
     });
 
@@ -1162,12 +1441,64 @@ async function updateSchedule(payload) {
       };
     }
 
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const confirmedRow = await fetchServiceOrderById(config, osId);
+    const confirmedDate = isoDateOnly(confirmedRow?.data_agendamento || confirmedRow?.data_agendada || confirmedRow?.data || "");
+    const confirmedTime = hhmm(confirmedRow?.hora_agendamento || confirmedRow?.hora_agendada || confirmedRow?.hora || "");
+    const expectedDate = isoDateOnly(entry.data);
+    const expectedTime = hhmm(entry.horario);
+
+    logSgpScheduleUpdate("verification", {
+      osId,
+      expected: {
+        data_agendamento: expectedDate,
+        hora_agendamento: expectedTime
+      },
+      confirmed: {
+        data_agendamento: confirmedDate,
+        hora_agendamento: confirmedTime
+      }
+    });
+
+    if (confirmedDate !== expectedDate || confirmedTime !== expectedTime) {
+      return {
+        statusCode: 502,
+        body: {
+          ok: false,
+          mode: "sgp",
+          message: `O SGP respondeu sucesso, mas a OS ${osId} continuou com agendamento ${confirmedDate || "-"} ${confirmedTime || "-"}.`,
+          response,
+          verification: {
+            expected: {
+              data_agendamento: expectedDate,
+              hora_agendamento: expectedTime
+            },
+            confirmed: {
+              data_agendamento: confirmedDate,
+              hora_agendamento: confirmedTime
+            }
+          }
+        }
+      };
+    }
+
+    removeManualSchedulesByMatcher((item) => {
+      const manualId = String(item.id || "").trim();
+      const manualProtocol = String(item.protocolo || "").trim();
+      const manualContract = String(item.contrato || "").trim();
+      return (
+        (manualId && manualId === id) ||
+        (manualProtocol && (manualProtocol === osId || manualProtocol === entry.protocolo)) ||
+        (manualContract && manualContract === entry.contrato && isoDateOnly(item.data) === entry.data)
+      );
+    });
+
     return {
       statusCode: 200,
       body: {
         ok: true,
         mode: "sgp",
-        message: "Agendamento atualizado no SGP com sucesso.",
+        message: `OS ${osId} atualizada no SGP com sucesso.`,
         response
       }
     };

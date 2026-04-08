@@ -106,7 +106,7 @@
 
             <label class="field">
               <span>Horario</span>
-              <input name="horario" type="time" required />
+              <input name="horario" type="text" inputmode="numeric" placeholder="HH:MM:SS" pattern="^\d{2}:\d{2}(:\d{2})?$" required />
             </label>
           </div>
 
@@ -230,7 +230,7 @@
               </label>
               <label class="field">
                 <span>Horário Problema Reportado</span>
-                <input name="horario" id="editHorario" type="time" />
+                <input name="horario" id="editHorario" type="text" inputmode="numeric" placeholder="HH:MM:SS" pattern="^\d{2}:\d{2}(:\d{2})?$" />
               </label>
             </div>
 

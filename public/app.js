@@ -163,6 +163,33 @@ function getDisplayTechnicianName(value) {
   return normalized;
 }
 
+function buildScheduleSuccessMessage(data, payload, editing) {
+  const reference = data.response?.os_id || data.response?.protocolo || data.response?.contratoId || payload.protocolo || payload.osId || "";
+  const defaultMessage = editing
+    ? (data.mode === "sgp"
+        ? `OS ${payload.osId || payload.protocolo || ""} atualizada no SGP com sucesso.`
+        : "Pre-agendamento local atualizado com sucesso.")
+    : (data.mode === "sgp"
+        ? "Ocorrencia e agendamento enviados ao SGP com sucesso."
+        : "Pre-agendamento local salvo com sucesso.");
+  const message = data.message || defaultMessage;
+  return reference ? `${message}\nReferencia: ${reference}` : message;
+}
+
+function formatTimeForInput(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized || normalized === "A definir") {
+    return "";
+  }
+  if (/^\d{2}:\d{2}:\d{2}$/.test(normalized)) {
+    return normalized;
+  }
+  if (/^\d{2}:\d{2}$/.test(normalized)) {
+    return `${normalized}:00`;
+  }
+  return normalized;
+}
+
 function renderClientLink(item, label) {
   if (!item.clienteUrl) {
     return escapeHtml(label);
@@ -223,9 +250,9 @@ function fillScheduleFormFromSchedule(item) {
   form.telefone.value = item.telefone || "";
   form.protocolo.value = item.protocolo || item.osId || "";
   form.rota.value = item.rota || "";
-  form.tecnico.value = item.tecnico && item.tecnico !== "A definir" ? item.tecnico : "";
+  form.tecnico.value = getDisplayTechnicianName(item.tecnico);
   form.data.value = item.data || "";
-  form.horario.value = item.horario && item.horario !== "A definir" ? item.horario : "";
+  form.horario.value = formatTimeForInput(item.horario);
   form.endereco.value = item.endereco || "";
   form.observacao.value = item.observacao || "";
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
@@ -243,6 +270,14 @@ function resetScheduleForm() {
   elements.scheduleForm.elements.data.value = elements.startDateFilter.value || today;
   resetContractLookupState();
   setScheduleFormMode("create");
+}
+
+function markScheduleFormForSgpEdit(osId) {
+  const form = elements.scheduleForm;
+  form.querySelector('input[name="id"]').value = `sgp-${osId}`;
+  form.querySelector('input[name="osId"]').value = osId;
+  form.querySelector('input[name="origem"]').value = "sgp";
+  setScheduleFormMode("edit");
 }
 
 function statusLabel(status) {
@@ -377,26 +412,22 @@ async function submitEditSchedule(event) {
   event.preventDefault();
   const formData = new FormData(elements.editScheduleForm);
   const payload = Object.fromEntries(formData.entries());
-
   const btn = elements.editScheduleForm.querySelector("button[type=submit]");
-  btn.disabled = true;
-
-  try {
-    const response = await fetch("/api/agendamentos/edit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.message || "Falha ao editar agendamento.");
-    alert(data.message || "Agendamento atualizado.");
-    elements.scheduleModal.close();
-    await loadDashboard();
-  } catch (error) {
-    alert(error.message);
-  } finally {
-    btn.disabled = false;
-  }
+  await persistSchedulePayload({
+    payload,
+    endpoint: "/api/agendamentos/edit",
+    editing: true,
+    button: btn,
+    onSuccess: async (data) => {
+      alert(buildScheduleSuccessMessage(data, payload, true));
+      elements.scheduleModal.close();
+      await loadDashboard();
+    },
+    onError: async (error) => {
+      alert(error.message);
+      await loadDashboard().catch(() => {});
+    }
+  });
 }
 
 async function submitCancelSchedule(event) {
@@ -436,6 +467,26 @@ async function submitSchedule(event) {
   const editing = isEditingSchedule();
   const endpoint = editing ? "/api/agendamentos/edit" : "/api/agendamentos";
   const button = elements.scheduleSubmitButton || elements.scheduleForm.querySelector("button[type=submit]");
+  await persistSchedulePayload({
+    payload,
+    endpoint,
+    editing,
+    button,
+    onSuccess: async (data) => {
+      alert(buildScheduleSuccessMessage(data, payload, editing));
+      resetScheduleForm();
+      await loadDashboard();
+    },
+    onError: async (error) => {
+      alert(error.message);
+      if (editing) {
+        await loadDashboard().catch(() => {});
+      }
+    }
+  });
+}
+
+async function persistSchedulePayload({ payload, endpoint, editing, button, onSuccess, onError }) {
   if (button) {
     button.disabled = true;
   }
@@ -451,16 +502,12 @@ async function submitSchedule(event) {
 
     const data = await response.json();
     if (!response.ok || !data.ok) {
-      throw new Error(data.message || "Falha ao salvar agendamento.");
+      throw new Error(data.message || (editing ? "Falha ao editar agendamento." : "Falha ao salvar agendamento."));
     }
 
-    const reference = data.response?.os_id || data.response?.protocolo || data.response?.contratoId || payload.protocolo || payload.osId || "";
-    const message = reference ? `${data.message || "Operacao concluida."}\nReferencia: ${reference}` : (data.message || "Operacao concluida.");
-    alert(message);
-    resetScheduleForm();
-    await loadDashboard();
+    await onSuccess(data);
   } catch (error) {
-    alert(error.message);
+    await onError(error);
   } finally {
     if (button) {
       button.disabled = false;
@@ -574,9 +621,11 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 
         const f = elements.scheduleForm.elements;
 
+        // Entra em modo de edicao de OS no SGP
+        markScheduleFormForSgpEdit(os.osId);
+
         // Protocolo / Ordem de Serviço
         if (f.protocolo) f.protocolo.value = os.osId;
-        if (f.osId) f.osId.value = os.osId;
 
         // POP → campo "rota"
         if (os.pop && f.rota) f.rota.value = os.pop;
@@ -592,9 +641,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
         // Horário do agendamento; se não existir, usa a hora de abertura como fallback visual
         if (f.horario) {
           if (os.hora_agendamento && os.hora_agendamento !== "00:00:00") {
-            f.horario.value = os.hora_agendamento.substring(0, 5);
+            f.horario.value = formatTimeForInput(os.hora_agendamento);
           } else if (os.hora_abertura) {
-            f.horario.value = os.hora_abertura.substring(0, 5);
+            f.horario.value = formatTimeForInput(os.hora_abertura);
           }
         }
 
@@ -613,6 +662,8 @@ function fillScheduleFormFromContract(contract, openOses = []) {
         item.style.background = "#dbeafe";
         item.style.borderColor = "#3b82f6";
 
+        setContractLookupStatus(`OS #${os.osId} carregada para edicao no SGP.`, "success");
+        elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
         showToast(`OS #${os.osId} selecionada — campos preenchidos.`);
       };
 
