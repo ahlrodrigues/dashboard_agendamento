@@ -557,9 +557,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
       if (os.data_agendamento && os.data_agendamento !== "0000-00-00") {
         const da = os.data_agendamento.substring(0, 10).split("-").reverse().join("/");
         const ha = os.hora_agendamento && os.hora_agendamento !== "00:00:00"
-          ? ` ${os.hora_agendamento.substring(0, 5)}`
+          ? ` às ${os.hora_agendamento.substring(0, 5)}`
           : "";
-        extra.push(`📅 ${da}${ha}`);
+        extra.push(`📅 Agendamento: ${da}${ha}`);
       }
       if (extra.length > 0) {
         const extraEl = document.createElement("span");
