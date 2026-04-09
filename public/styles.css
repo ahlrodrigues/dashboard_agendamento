@@ -261,7 +261,7 @@ textarea:focus {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 14px;
 }
 
@@ -294,6 +294,34 @@ textarea:focus {
 
 .summary-card.green {
   background: linear-gradient(135deg, #1f8f4f, #5acb82);
+}
+
+.summary-card.slate {
+  background: linear-gradient(135deg, #475569, #64748b);
+}
+
+.summary-card.gold {
+  background: linear-gradient(135deg, #b7791f, #d69e2e);
+}
+
+.summary-card.sky {
+  background: linear-gradient(135deg, #1d73b2, #5fb2e6);
+}
+
+.summary-card.violet {
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+}
+
+.summary-card.orange {
+  background: linear-gradient(135deg, #b45309, #f59e0b);
+}
+
+.summary-card.orange-deep {
+  background: linear-gradient(135deg, #c96b1f, #f59c52);
+}
+
+.summary-card.red {
+  background: linear-gradient(135deg, #c53b37, #ef6b66);
 }
 
 .calendar-grid {

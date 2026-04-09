@@ -12,8 +12,15 @@ const state = {
 const summaryConfig = [
   { key: "agendado", label: "Agendadas", className: "blue" },
   { key: "pre_agendado", label: "Pre-agendadas", className: "amber" },
-  { key: "confirmacao_solicitada", label: "Solicitadas confirmacao", className: "pink" },
-  { key: "confirmacao_confirmada", label: "Confirmadas", className: "green" }
+  { key: "sem_solicitacao", label: "Sem solicitacao", className: "slate" },
+  { key: "na_fila_envio", label: "Na fila", className: "gold" },
+  { key: "processando_envio", label: "Enviando", className: "sky" },
+  { key: "aguardando_confirmacao", label: "Aguardando", className: "pink" },
+  { key: "reenvio_1", label: "1o reenvio", className: "violet" },
+  { key: "reenvio_2", label: "2o reenvio", className: "violet" },
+  { key: "envio_manual", label: "Envio manual", className: "orange" },
+  { key: "rejeitado", label: "Negativas", className: "red" },
+  { key: "erro_envio", label: "Erros envio", className: "orange-deep" }
 ];
 
 const elements = {

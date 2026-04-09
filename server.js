@@ -1268,8 +1268,22 @@ function normalizeStatus(raw) {
       raw.situacao ||
       ""
   ).toLowerCase();
+  const hasScheduleDate = Boolean(isoDateOnly(
+    raw.data_agendamento ||
+    raw.data_agendada ||
+    raw.data_marcada ||
+    raw.data ||
+    ""
+  ));
+  const hasScheduleTime = normalizeSlot(
+    raw.hora_agendamento ||
+    raw.hora_marcada ||
+    raw.hora ||
+    ""
+  ) !== "A definir";
+  const hasAssignedTechnician = hasMeaningfulTechnician(normalizeTechnician(raw));
 
-  if (text.includes("agend")) {
+  if (text.includes("agend") && hasScheduleDate && hasScheduleTime && hasAssignedTechnician) {
     return "agendado";
   }
   return "pre_agendado";
@@ -1609,19 +1623,28 @@ function summarizeSchedules(schedules) {
     total: schedules.length,
     agendado: 0,
     pre_agendado: 0,
-    confirmacao_solicitada: 0,
-    confirmacao_confirmada: 0
+    sem_solicitacao: 0,
+    na_fila_envio: 0,
+    processando_envio: 0,
+    aguardando_confirmacao: 0,
+    reenvio_1: 0,
+    reenvio_2: 0,
+    envio_manual: 0,
+    rejeitado: 0,
+    erro_envio: 0
   };
 
   for (const item of schedules) {
     if (summary[item.status] !== undefined) {
       summary[item.status] += 1;
     }
-    if (["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(String(item.confirmationStatus || "").trim())) {
-      summary.confirmacao_solicitada += 1;
+    const confirmationStatus = String(item.confirmationStatus || "").trim() || "sem_confirmacao";
+    if (confirmationStatus === "sem_confirmacao") {
+      summary.sem_solicitacao += 1;
+      continue;
     }
-    if (String(item.confirmationStatus || "").trim() === "confirmado") {
-      summary.confirmacao_confirmada += 1;
+    if (summary[confirmationStatus] !== undefined) {
+      summary[confirmationStatus] += 1;
     }
   }
   return summary;
