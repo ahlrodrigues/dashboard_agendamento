@@ -1,11 +1,15 @@
 const state = {
   data: null,
-  schedulesById: new Map()
+  schedulesById: new Map(),
+  selectedScheduleIds: new Set(),
+  sendingConfirmation: false
 };
 
 const summaryConfig = [
   { key: "agendado", label: "Agendadas", className: "blue" },
-  { key: "pre_agendado", label: "Pre-agendadas", className: "amber" }
+  { key: "pre_agendado", label: "Pre-agendadas", className: "amber" },
+  { key: "confirmacao_solicitada", label: "Solicitadas confirmacao", className: "pink" },
+  { key: "confirmacao_confirmada", label: "Confirmadas", className: "green" }
 ];
 
 const elements = {
@@ -18,6 +22,8 @@ const elements = {
   nextWeekButton: document.querySelector("#nextWeekButton"),
   summaryCards: document.querySelector("#summaryCards"),
   calendarGrid: document.querySelector("#calendarGrid"),
+  sendConfirmationButton: document.querySelector("#sendConfirmationButton"),
+  sendSelectionCount: document.querySelector("#sendSelectionCount"),
   scheduleTableBody: document.querySelector("#scheduleTableBody"),
   tableCount: document.querySelector("#tableCount"),
   weekRange: document.querySelector("#weekRange"),
@@ -116,7 +122,7 @@ function renderCalendar(grid) {
   for (const slot of grid.slots) {
     fragments.push(`<div class="slot-label">${slot}</div>`);
     for (const day of grid.days) {
-      const items = grid.cells[day.date]?.[slot] || [];
+      const items = (grid.cells[day.date]?.[slot] || []).map((item) => state.schedulesById.get(item.id) || item);
       fragments.push(`
         <div class="calendar-cell">
           ${items.length ? items.map(renderChip).join("") : ""}
@@ -133,16 +139,95 @@ function renderChip(item) {
   const routeLabel = escapeHtml(item.rota || "");
   const technicianName = getDisplayTechnicianName(item.tecnico);
   const technicianLabel = technicianName ? `Tecnico: ${escapeHtml(technicianName)}` : "Tecnico:";
+  const confirmationLabel = confirmationStatusLabel(item.confirmationStatus, item.confirmationSent);
+  const confirmationTitle = item.confirmationTitle ? ` title="${escapeHtml(item.confirmationTitle)}"` : "";
+  const selected = state.selectedScheduleIds.has(item.id);
+  const canSendConfirmation = canRequestConfirmation(item);
+  const selectTitle = canSendConfirmation
+    ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
+    : "OS indisponivel para envio";
   const deleteButton = canDeleteSchedule(item)
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
   return `
-    <div class="chip ${item.status}">
-      <div class="chip-actions">${deleteButton}</div>
+    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}"${confirmationTitle}>
+      <div class="chip-actions">
+        <button class="chip-select-button${selected ? " is-selected" : ""}${canSendConfirmation ? "" : " is-disabled"}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>
+        ${deleteButton}
+      </div>
       <strong>${clientName}</strong>
-      <small>${routeLabel}<br />${technicianLabel}</small>
+      <small>${routeLabel}<br />${technicianLabel}<br />Confirmacao: ${confirmationLabel}</small>
+      <span class="chip-flag">${canSendConfirmation ? `OS ${escapeHtml(item.osId || item.protocolo || "")}` : "Envio indisponivel"}</span>
     </div>
   `;
+}
+
+function confirmationStatusClass(status) {
+  const value = String(status || "").trim();
+  if (value === "na_fila_envio") {
+    return "confirmation-fila";
+  }
+  if (value === "processando_envio") {
+    return "confirmation-processando";
+  }
+  if (value === "confirmado") {
+    return "confirmation-confirmado";
+  }
+  if (value === "rejeitado") {
+    return "confirmation-rejeitado";
+  }
+  if (value === "aguardando_confirmacao") {
+    return "confirmation-aguardando";
+  }
+  if (value === "erro_envio") {
+    return "confirmation-erro";
+  }
+  return "confirmation-sem";
+}
+
+function confirmationStatusLabel(status, sent = false) {
+  const value = String(status || "").trim();
+  if (value === "na_fila_envio") {
+    return "Na fila";
+  }
+  if (value === "processando_envio") {
+    return "Enviando";
+  }
+  if (value === "confirmado") {
+    return "Positiva";
+  }
+  if (value === "rejeitado") {
+    return "Negativa";
+  }
+  if (value === "aguardando_confirmacao") {
+    return "Aguardando";
+  }
+  if (value === "erro_envio") {
+    return "Erro ao enviar";
+  }
+  return sent ? "Solicitado ao SGP" : "Sem solicitacao";
+}
+
+function canRequestConfirmation(item) {
+  return item.origem === "sgp" && String(item.osId || "").trim();
+}
+
+function updateSelectionControls() {
+  if (!elements.sendConfirmationButton || !elements.sendSelectionCount) {
+    return;
+  }
+
+  let count = 0;
+  for (const id of state.selectedScheduleIds) {
+    const item = state.schedulesById.get(id);
+    if (item && canRequestConfirmation(item)) {
+      count += 1;
+    }
+  }
+
+  elements.sendSelectionCount.textContent = count ? `${count} selecionada(s)` : "Nenhuma selecionada";
+  elements.sendConfirmationButton.disabled = count === 0 || state.sendingConfirmation;
+  elements.sendConfirmationButton.textContent = state.sendingConfirmation ? "Enviando..." : "Enviar confirmacao";
 }
 
 function canDeleteSchedule(item) {
@@ -173,7 +258,17 @@ function buildScheduleSuccessMessage(data, payload, editing) {
         ? "Ocorrencia e agendamento enviados ao SGP com sucesso."
         : "Pre-agendamento local salvo com sucesso.");
   const message = data.message || defaultMessage;
-  return reference ? `${message}\nReferencia: ${reference}` : message;
+  const lines = [message];
+  if (reference) {
+    lines.push(`Referencia: ${reference}`);
+  }
+  if (data.confirmationUrl) {
+    lines.push(`Link de confirmacao: ${data.confirmationUrl}`);
+  }
+  if (data.confirmationStatus) {
+    lines.push(`Status da confirmacao: ${confirmationStatusLabel(data.confirmationStatus, data.confirmationSent)}`);
+  }
+  return lines.join("\n");
 }
 
 function formatTimeForInput(value) {
@@ -358,12 +453,16 @@ async function loadDashboard() {
   }
   state.data = data;
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
+  state.selectedScheduleIds = new Set(
+    [...state.selectedScheduleIds].filter((id) => state.schedulesById.has(id))
+  );
 
   renderSummary(data.summary);
   renderNotices(data.notices);
   renderCalendar(data.grid);
   renderTable(data.schedules);
   updateMeta(data);
+  updateSelectionControls();
 
   if (!elements.startDateFilter.value || elements.startDateFilter.value !== data.period.startDate) {
     elements.startDateFilter.value = data.period.startDate;
@@ -393,6 +492,29 @@ async function refreshDashboard() {
 }
 
 async function handleCalendarGridClick(event) {
+  const selectButton = event.target.closest(".chip-select-button");
+  if (selectButton) {
+    const scheduleId = selectButton.dataset.selectScheduleId || "";
+    const item = state.schedulesById.get(scheduleId);
+    if (!item) {
+      return;
+    }
+    if (!canRequestConfirmation(item)) {
+      showToast("Essa OS nao pode receber solicitacao de confirmacao.");
+      return;
+    }
+
+    if (state.selectedScheduleIds.has(scheduleId)) {
+      state.selectedScheduleIds.delete(scheduleId);
+    } else {
+      state.selectedScheduleIds.add(scheduleId);
+    }
+
+    renderCalendar(state.data.grid);
+    updateSelectionControls();
+    return;
+  }
+
   const button = event.target.closest(".chip-delete-button");
   if (!button) {
     return;
@@ -484,6 +606,67 @@ async function submitSchedule(event) {
       }
     }
   });
+}
+
+async function sendSelectedConfirmations(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const items = [...state.selectedScheduleIds]
+    .map((id) => state.schedulesById.get(id))
+    .filter((item) => item && canRequestConfirmation(item));
+
+  if (!items.length) {
+    updateSelectionControls();
+    return;
+  }
+
+  state.sendingConfirmation = true;
+  updateSelectionControls();
+
+  try {
+    const response = await fetch("/api/agendamentos/send-confirmation", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ items })
+    });
+    const responseText = await response.text();
+    let data = null;
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (error) {
+      throw new Error(`Resposta inesperada do servidor ao enviar confirmacao (${response.status}).`);
+    }
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Falha ao solicitar envio de confirmacao.");
+    }
+
+    const queuedIds = new Set((data.queued || []).map((item) => String(item.id || "").trim()).filter(Boolean));
+    for (const id of queuedIds) {
+      const current = state.schedulesById.get(id);
+      if (!current) {
+        continue;
+      }
+      current.confirmationStatus = "na_fila_envio";
+      current.confirmationSent = false;
+    }
+    state.selectedScheduleIds.clear();
+    renderCalendar(state.data.grid);
+    updateSelectionControls();
+
+    const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
+    alert(skippedCount ? `${data.message}\n${skippedCount} item(ns) foi(ram) ignorado(s).` : data.message);
+    await loadDashboard();
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    state.sendingConfirmation = false;
+    updateSelectionControls();
+  }
 }
 
 async function persistSchedulePayload({ payload, endpoint, editing, button, onSuccess, onError }) {
@@ -721,6 +904,9 @@ function wireEvents() {
   elements.searchFilter.addEventListener("input", debounce(refreshDashboard, 250));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
   elements.calendarGrid.addEventListener("click", handleCalendarGridClick);
+  if (elements.sendConfirmationButton) {
+    elements.sendConfirmationButton.addEventListener("click", sendSelectedConfirmations);
+  }
   elements.lookupContractButton.addEventListener("click", lookupContractAndFill);
   if (elements.cancelEditButton) {
     elements.cancelEditButton.addEventListener("click", resetScheduleForm);

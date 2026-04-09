@@ -147,12 +147,18 @@
       <section class="calendar-panel">
         <div class="panel-header">
           <h2>Calendario Semanal</h2>
-          <div class="calendar-nav">
-            <button id="prevWeekButton" class="ghost-button nav-button" type="button"
-              aria-label="Semana anterior">&larr;</button>
-            <span id="weekRange" class="muted">-</span>
-            <button id="nextWeekButton" class="ghost-button nav-button" type="button"
-              aria-label="Próxima semana">&rarr;</button>
+          <div class="calendar-toolbar">
+            <div class="calendar-nav">
+              <button id="prevWeekButton" class="ghost-button nav-button" type="button"
+                aria-label="Semana anterior">&larr;</button>
+              <span id="weekRange" class="muted">-</span>
+              <button id="nextWeekButton" class="ghost-button nav-button" type="button"
+                aria-label="Próxima semana">&rarr;</button>
+            </div>
+            <div class="calendar-bulk-actions">
+              <span id="sendSelectionCount" class="muted">Nenhuma selecionada</span>
+              <button id="sendConfirmationButton" class="primary-button" type="button" disabled>Enviar confirmacao</button>
+            </div>
           </div>
         </div>
         <div id="calendarGrid" class="calendar-grid"></div>
