@@ -1289,6 +1289,23 @@ function normalizeStatus(raw) {
   return "pre_agendado";
 }
 
+function isOpenServiceOrder(raw) {
+  const statusId = String(raw?.status_id ?? "").trim();
+  const statusText = String(
+    raw?.status_descricao ||
+    raw?.status_nome ||
+    raw?.status_label ||
+    raw?.status ||
+    raw?.situacao ||
+    ""
+  ).trim().toLowerCase();
+
+  if (statusId === "0") {
+    return true;
+  }
+  return statusText === "aberta";
+}
+
 function pickClientName(raw) {
   return (
     raw.nome_razao_social ||
@@ -1773,7 +1790,10 @@ async function getDashboardData(query) {
 
   try {
     const sgpRows = await listServiceOrders(config, { startDate, endDate });
-    schedules = sgpRows.map((item) => normalizeSchedule(config, item, "sgp")).filter((item) => item.data);
+    schedules = sgpRows
+      .filter((item) => isOpenServiceOrder(item))
+      .map((item) => normalizeSchedule(config, item, "sgp"))
+      .filter((item) => item.data);
     schedules = await enrichSchedulesWithConfirmation(config, schedules);
     if (!schedules.length) {
       sourceMode = "mock";

@@ -188,6 +188,20 @@ function matchesCurrentFilters(item) {
       if (confirmationStatus !== "confirmado") {
         return false;
       }
+    } else if ([
+      "sem_confirmacao",
+      "na_fila_envio",
+      "processando_envio",
+      "aguardando_confirmacao",
+      "reenvio_1",
+      "reenvio_2",
+      "envio_manual",
+      "rejeitado",
+      "erro_envio"
+    ].includes(status)) {
+      if (confirmationStatus !== status) {
+        return false;
+      }
     } else if (item.status !== status) {
       return false;
     }
