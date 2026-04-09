@@ -17,10 +17,16 @@ const DEFAULT_STATUSES = [0, 1];
 const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 const DEFAULT_TIMEOUT_MS = 12000;
 const DEFAULT_SEND_INTERVAL_MS = 30000;
+const CONFIRMATION_RESEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const CONFIRMATION_RESEND_FIRST_MS = 2 * 60 * 60 * 1000;
+const CONFIRMATION_RESEND_SECOND_MS = 4 * 60 * 60 * 1000;
+const CONFIRMATION_MANUAL_AFTER_MS = 6 * 60 * 60 * 1000;
 const CONFIRMATION_CACHE_TTL_MS = 5 * 60 * 1000;
 const confirmationStatusCache = new Map();
 let sgpDispatchQueue = Promise.resolve();
 let lastSgpDispatchAt = 0;
+let confirmationResendJobTimer = null;
+let confirmationResendJobRunning = false;
 
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -447,6 +453,7 @@ function applyConfirmationDispatchState(details, dispatchEntry) {
   }
 
   const dispatchState = String(dispatchEntry?.state || "").trim();
+  const resendCount = Math.max(0, Number(dispatchEntry?.resendCount || 0));
   if (dispatchState === "queued") {
     next.confirmationStatus = "na_fila_envio";
     next.confirmationSent = false;
@@ -468,8 +475,19 @@ function applyConfirmationDispatchState(details, dispatchEntry) {
     return next;
   }
 
+  if (dispatchState === "manual") {
+    next.confirmationStatus = "envio_manual";
+    next.confirmationSent = false;
+    next.confirmationRequestedAt = "";
+    return next;
+  }
+
   if (dispatchEntry?.requestedAt || dispatchState === "requested") {
-    next.confirmationStatus = "aguardando_confirmacao";
+    next.confirmationStatus = resendCount >= 2
+      ? "reenvio_2"
+      : resendCount === 1
+        ? "reenvio_1"
+        : "aguardando_confirmacao";
     next.confirmationSent = true;
     next.confirmationRequestedAt = String(dispatchEntry.requestedAt || "").trim();
   }
@@ -670,11 +688,23 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
 
   const dispatchRequested = Boolean(smsClientValues.length && payload.gateway_sms);
   if (dispatchRequested && response.status >= 200 && response.status < 400) {
+    const existingEntry = readConfirmationDispatchEntry(osId) || {};
+    const dispatchKind = String(entry?.dispatchKind || existingEntry.dispatchKind || "inicial").trim() || "inicial";
+    const nowIso = new Date().toISOString();
+    const resendCount = dispatchKind === "reenvio_2"
+      ? 2
+      : dispatchKind === "reenvio_1"
+        ? Math.max(1, Number(existingEntry.resendCount || 0) || 0)
+        : Math.max(0, Number(existingEntry.resendCount || 0) || 0);
     writeConfirmationDispatchEntry(osId, {
       state: "requested",
-      requestedAt: new Date().toISOString(),
+      requestedAt: nowIso,
+      firstRequestedAt: existingEntry.firstRequestedAt || nowIso,
+      lastSentAt: nowIso,
       telefone: entry.telefone,
-      gateway: payload.gateway_sms
+      gateway: payload.gateway_sms,
+      dispatchKind,
+      resendCount
     });
   }
 
@@ -693,12 +723,24 @@ async function queueConfirmationDispatch(config, item) {
     throw new Error("OS nao informada para envio da confirmacao.");
   }
 
+  const existingEntry = readConfirmationDispatchEntry(osId) || {};
+  const dispatchKind = String(item?.dispatchKind || "").trim() || "inicial";
+  const nextResendCount = dispatchKind === "reenvio_2"
+    ? 2
+    : dispatchKind === "reenvio_1"
+      ? Math.max(1, Number(existingEntry.resendCount || 0) || 0)
+      : Math.max(0, Number(existingEntry.resendCount || 0) || 0);
+
   writeConfirmationDispatchEntry(osId, {
     state: "queued",
     queuedAt: new Date().toISOString(),
-    requestedAt: "",
+    requestedAt: existingEntry.requestedAt || "",
+    firstRequestedAt: existingEntry.firstRequestedAt || "",
+    lastSentAt: existingEntry.lastSentAt || "",
     errorMessage: "",
-    telefone: String(item?.telefone || "").trim()
+    telefone: String(item?.telefone || "").trim(),
+    dispatchKind,
+    resendCount: nextResendCount
   });
 
   const entry = {
@@ -718,7 +760,9 @@ async function queueConfirmationDispatch(config, item) {
     writeConfirmationDispatchEntry(osId, {
       state: "processing",
       processingAt: new Date().toISOString(),
-      errorMessage: ""
+      errorMessage: "",
+      dispatchKind,
+      resendCount: nextResendCount
     });
 
     try {
@@ -742,6 +786,117 @@ async function queueConfirmationDispatch(config, item) {
       });
     }
   });
+}
+
+function determineConfirmationResendAction(dispatchEntry, nowMs = Date.now()) {
+  const state = String(dispatchEntry?.state || "").trim();
+  if (!dispatchEntry || !["requested", ""].includes(state)) {
+    return "";
+  }
+
+  const firstRequestedAt = Date.parse(String(dispatchEntry.firstRequestedAt || dispatchEntry.requestedAt || "").trim());
+  if (!Number.isFinite(firstRequestedAt)) {
+    return "";
+  }
+
+  const resendCount = Math.max(0, Number(dispatchEntry.resendCount || 0) || 0);
+  const elapsedMs = nowMs - firstRequestedAt;
+  if (resendCount < 1 && elapsedMs >= CONFIRMATION_RESEND_FIRST_MS) {
+    return "reenvio_1";
+  }
+  if (resendCount < 2 && elapsedMs >= CONFIRMATION_RESEND_SECOND_MS) {
+    return "reenvio_2";
+  }
+  if (resendCount >= 2 && elapsedMs >= CONFIRMATION_MANUAL_AFTER_MS) {
+    return "manual";
+  }
+  return "";
+}
+
+async function processPendingConfirmationResends() {
+  if (confirmationResendJobRunning) {
+    return;
+  }
+
+  confirmationResendJobRunning = true;
+  try {
+    const config = loadConfig();
+    const entries = Object.entries(readConfirmationDispatchLog());
+    if (!entries.length) {
+      return;
+    }
+
+    for (const [osId, dispatchEntry] of entries) {
+      const currentEntry = dispatchEntry && typeof dispatchEntry === "object" ? dispatchEntry : {};
+      if (["queued", "processing", "error", "manual", "answered"].includes(String(currentEntry.state || "").trim())) {
+        continue;
+      }
+
+      const details = await fetchConfirmationDetailsForOs(config, osId).catch(() => null);
+      const confirmationStatus = String(details?.confirmationStatus || "").trim();
+      if (confirmationStatus === "confirmado" || confirmationStatus === "rejeitado") {
+        writeConfirmationDispatchEntry(osId, {
+          state: "answered",
+          answeredAt: new Date().toISOString()
+        });
+        continue;
+      }
+
+      const action = determineConfirmationResendAction(currentEntry, Date.now());
+      if (!action) {
+        continue;
+      }
+
+      if (action === "manual") {
+        writeConfirmationDispatchEntry(osId, {
+          state: "manual",
+          manualAt: new Date().toISOString()
+        });
+        continue;
+      }
+
+      const serviceOrder = await fetchServiceOrderById(config, osId).catch(() => null);
+      const scheduleDate = isoDateOnly(
+        serviceOrder?.data_agendamento ||
+        serviceOrder?.data_agendada ||
+        serviceOrder?.data ||
+        ""
+      );
+      const scheduleTime = hhmm(
+        serviceOrder?.hora_agendamento ||
+        serviceOrder?.hora_agendada ||
+        serviceOrder?.hora ||
+        ""
+      );
+
+      await queueConfirmationDispatch(config, {
+        osId,
+        cliente: String(serviceOrder?.cliente || "").trim(),
+        contrato: String(serviceOrder?.contrato || "").trim(),
+        telefone: String(currentEntry.telefone || "").trim(),
+        protocolo: String(serviceOrder?.ocorrencia || serviceOrder?.protocolo || "").trim(),
+        rota: String(serviceOrder?.pop || "").trim(),
+        tecnico: String(serviceOrder?.responsavel || "").trim(),
+        data: scheduleDate,
+        horario: scheduleTime,
+        endereco: "",
+        observacao: "",
+        dispatchKind: action
+      });
+    }
+  } finally {
+    confirmationResendJobRunning = false;
+  }
+}
+
+function ensureConfirmationResendJobStarted() {
+  if (confirmationResendJobTimer) {
+    return;
+  }
+  confirmationResendJobTimer = setInterval(() => {
+    void processPendingConfirmationResends();
+  }, CONFIRMATION_RESEND_CHECK_INTERVAL_MS);
+  void processPendingConfirmationResends();
 }
 
 async function postToSgp(config, endpointPath, payload) {
@@ -1462,7 +1617,7 @@ function summarizeSchedules(schedules) {
     if (summary[item.status] !== undefined) {
       summary[item.status] += 1;
     }
-    if (["na_fila_envio", "processando_envio", "aguardando_confirmacao"].includes(String(item.confirmationStatus || "").trim())) {
+    if (["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(String(item.confirmationStatus || "").trim())) {
       summary.confirmacao_solicitada += 1;
     }
     if (String(item.confirmationStatus || "").trim() === "confirmado") {
@@ -1474,8 +1629,20 @@ function summarizeSchedules(schedules) {
 
 function filterSchedules(schedules, { search, status }) {
   return schedules.filter((item) => {
-    if (status && status !== "todos" && item.status !== status) {
-      return false;
+    const confirmationStatus = String(item.confirmationStatus || "").trim();
+
+    if (status && status !== "todos") {
+      if (status === "confirmacao_solicitada") {
+        if (!["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(confirmationStatus)) {
+          return false;
+        }
+      } else if (status === "confirmacao_confirmada") {
+        if (confirmationStatus !== "confirmado") {
+          return false;
+        }
+      } else if (item.status !== status) {
+        return false;
+      }
     }
     if (!search) {
       return true;
@@ -1605,7 +1772,8 @@ async function getDashboardData(query) {
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
 
   const filtered = filterSchedules(schedules, { search, status });
-  const serializedSchedules = filtered.map(serializeSchedule);
+  const serializedSchedules = schedules.map(serializeSchedule);
+  const filteredSerializedSchedules = filtered.map(serializeSchedule);
   const summary = summarizeSchedules(serializedSchedules);
   const grid = buildGrid(serializedSchedules, selectedDate, slots);
 
@@ -1632,7 +1800,7 @@ async function getDashboardData(query) {
       status
     },
     grid,
-    schedules: serializedSchedules
+    schedules: filteredSerializedSchedules
   };
 }
 
@@ -2370,6 +2538,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   ensureDataDir();
+  ensureConfirmationResendJobStarted();
   console.log(`Dashboard disponivel em http://${HOST}:${PORT}`);
 });
 

@@ -147,6 +147,7 @@ function renderChip(item) {
   const confirmationTitle = item.confirmationTitle ? ` title="${escapeHtml(item.confirmationTitle)}"` : "";
   const selected = state.selectedScheduleIds.has(item.id);
   const canSendConfirmation = canRequestConfirmation(item);
+  const hiddenByFilter = !matchesCurrentFilters(item);
   const selectTitle = canSendConfirmation
     ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
     : "OS indisponivel para envio";
@@ -154,7 +155,7 @@ function renderChip(item) {
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
   return `
-    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}"${confirmationTitle}>
+    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}"${confirmationTitle}>
       <div class="chip-actions">
         <button class="chip-select-button${selected ? " is-selected" : ""}${canSendConfirmation ? "" : " is-disabled"}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>
         ${deleteButton}
@@ -166,6 +167,40 @@ function renderChip(item) {
   `;
 }
 
+function matchesCurrentFilters(item) {
+  const search = String(elements.searchFilter?.value || "").trim().toLowerCase();
+  const status = String(elements.statusFilter?.value || "todos").trim().toLowerCase();
+  const confirmationStatus = String(item.confirmationStatus || "").trim();
+
+  if (status && status !== "todos") {
+    if (status === "confirmacao_solicitada") {
+      if (!["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(confirmationStatus)) {
+        return false;
+      }
+    } else if (status === "confirmacao_confirmada") {
+      if (confirmationStatus !== "confirmado") {
+        return false;
+      }
+    } else if (item.status !== status) {
+      return false;
+    }
+  }
+
+  if (!search) {
+    return true;
+  }
+
+  const haystack = [
+    item.cliente,
+    item.protocolo,
+    item.contrato,
+    item.telefone,
+    item.rota,
+    item.tecnico
+  ].join(" ").toLowerCase();
+  return haystack.includes(search);
+}
+
 function confirmationStatusClass(status) {
   const value = String(status || "").trim();
   if (value === "na_fila_envio") {
@@ -173,6 +208,9 @@ function confirmationStatusClass(status) {
   }
   if (value === "processando_envio") {
     return "confirmation-processando";
+  }
+  if (value === "reenvio_1" || value === "reenvio_2") {
+    return "confirmation-reenvio";
   }
   if (value === "confirmado") {
     return "confirmation-confirmado";
@@ -186,6 +224,9 @@ function confirmationStatusClass(status) {
   if (value === "erro_envio") {
     return "confirmation-erro";
   }
+  if (value === "envio_manual") {
+    return "confirmation-manual";
+  }
   return "confirmation-sem";
 }
 
@@ -196,6 +237,12 @@ function confirmationStatusLabel(status, sent = false) {
   }
   if (value === "processando_envio") {
     return "Enviando";
+  }
+  if (value === "reenvio_1") {
+    return "1o reenvio";
+  }
+  if (value === "reenvio_2") {
+    return "2o reenvio";
   }
   if (value === "confirmado") {
     return "Positiva";
@@ -208,6 +255,9 @@ function confirmationStatusLabel(status, sent = false) {
   }
   if (value === "erro_envio") {
     return "Erro ao enviar";
+  }
+  if (value === "envio_manual") {
+    return "Envio manual";
   }
   return sent ? "Solicitado ao SGP" : "Sem solicitacao";
 }
