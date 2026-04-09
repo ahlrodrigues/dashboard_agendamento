@@ -1667,9 +1667,10 @@ function summarizeSchedules(schedules) {
   return summary;
 }
 
-function filterSchedules(schedules, { search, status }) {
+function filterSchedules(schedules, { search, status, pops = [] }) {
   return schedules.filter((item) => {
     const confirmationStatus = String(item.confirmationStatus || "").trim();
+    const route = String(item.rota || "").trim();
 
     if (status && status !== "todos") {
       if (status === "confirmacao_solicitada") {
@@ -1683,6 +1684,9 @@ function filterSchedules(schedules, { search, status }) {
       } else if (item.status !== status) {
         return false;
       }
+    }
+    if (Array.isArray(pops) && pops.length && !pops.includes(route)) {
+      return false;
     }
     if (!search) {
       return true;
@@ -1780,6 +1784,10 @@ async function getDashboardData(query) {
   const endDate = isoDateOnly(query.get("fim")) || plusDays(selectedDate, Number(config.dashboard.janela_dias_futuro || 14));
   const search = String(query.get("busca") || "").trim();
   const status = String(query.get("status") || "todos").trim().toLowerCase();
+  const pops = String(query.get("pops") || "")
+    .split(",")
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
   const slots = Array.isArray(config.dashboard.horarios_padrao) && config.dashboard.horarios_padrao.length
     ? config.dashboard.horarios_padrao
     : DEFAULT_SLOTS;
@@ -1814,11 +1822,12 @@ async function getDashboardData(query) {
   schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
 
-  const filtered = filterSchedules(schedules, { search, status });
+  const filtered = filterSchedules(schedules, { search, status, pops });
   const serializedSchedules = schedules.map(serializeSchedule);
   const filteredSerializedSchedules = filtered.map(serializeSchedule);
   const summary = summarizeSchedules(serializedSchedules);
   const grid = buildGrid(serializedSchedules, selectedDate, slots);
+  const availableRoutes = Array.from(new Set(serializedSchedules.map((item) => String(item.rota || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
   return {
     ok: true,
@@ -1840,8 +1849,10 @@ async function getDashboardData(query) {
     summary,
     filters: {
       search,
-      status
+      status,
+      pops
     },
+    availableRoutes,
     grid,
     schedules: filteredSerializedSchedules
   };

@@ -109,26 +109,44 @@ p {
   gap: 12px;
 }
 
+.calendar-panel .panel-header {
+  flex-direction: column;
+  align-items: stretch;
+}
+
 .calendar-nav {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
 }
 
 .calendar-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
+  width: 100%;
 }
 
 .calendar-bulk-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  grid-column: 3;
   gap: 12px;
   flex-wrap: wrap;
 }
+
+#weekRange {
+  min-width: 220px;
+  text-align: center;
+}
+
+.calendar-nav {
+  grid-column: 2;
+}
+
 
 .nav-button {
   min-width: 42px;
@@ -208,6 +226,11 @@ select:focus,
 textarea:focus {
   border-color: rgba(28, 116, 217, 0.45);
   box-shadow: 0 0 0 4px rgba(28, 116, 217, 0.12);
+}
+
+select[multiple] {
+  min-height: 144px;
+  padding-block: 8px;
 }
 
 .primary-button,

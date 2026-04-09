@@ -27,6 +27,7 @@ const elements = {
   startDateFilter: document.querySelector("#startDateFilter"),
   endDateFilter: document.querySelector("#endDateFilter"),
   statusFilter: document.querySelector("#statusFilter"),
+  routeFilter: document.querySelector("#routeFilter"),
   searchFilter: document.querySelector("#searchFilter"),
   refreshButton: document.querySelector("#refreshButton"),
   prevWeekButton: document.querySelector("#prevWeekButton"),
@@ -177,6 +178,7 @@ function renderChip(item) {
 function matchesCurrentFilters(item) {
   const search = String(elements.searchFilter?.value || "").trim().toLowerCase();
   const status = String(elements.statusFilter?.value || "todos").trim().toLowerCase();
+  const selectedRoutes = new Set(Array.from(elements.routeFilter?.selectedOptions || []).map((option) => String(option.value || "").trim()).filter(Boolean));
   const confirmationStatus = String(item.confirmationStatus || "").trim();
 
   if (status && status !== "todos") {
@@ -208,18 +210,43 @@ function matchesCurrentFilters(item) {
   }
 
   if (!search) {
-    return true;
+    if (!selectedRoutes.size) {
+      return true;
+    }
+  } else {
+    const haystack = [
+      item.cliente,
+      item.protocolo,
+      item.contrato,
+      item.telefone,
+      item.rota,
+      item.tecnico
+    ].join(" ").toLowerCase();
+    if (!haystack.includes(search)) {
+      return false;
+    }
   }
 
-  const haystack = [
-    item.cliente,
-    item.protocolo,
-    item.contrato,
-    item.telefone,
-    item.rota,
-    item.tecnico
-  ].join(" ").toLowerCase();
-  return haystack.includes(search);
+  if (selectedRoutes.size && !selectedRoutes.has(String(item.rota || "").trim())) {
+    return false;
+  }
+
+  return true;
+}
+
+function getSelectedRoutes() {
+  return Array.from(elements.routeFilter?.selectedOptions || []).map((option) => String(option.value || "").trim()).filter(Boolean);
+}
+
+function renderRouteFilter(options = [], selectedValues = []) {
+  if (!elements.routeFilter) {
+    return;
+  }
+
+  const selected = new Set(selectedValues.map((value) => String(value || "").trim()).filter(Boolean));
+  elements.routeFilter.innerHTML = options.length
+    ? options.map((value) => `<option value="${escapeHtml(value)}"${selected.has(value) ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")
+    : "";
 }
 
 function confirmationStatusClass(status) {
@@ -517,6 +544,10 @@ async function loadDashboard() {
   if (elements.statusFilter.value) {
     params.set("status", elements.statusFilter.value);
   }
+  const selectedRoutes = getSelectedRoutes();
+  if (selectedRoutes.length) {
+    params.set("pops", selectedRoutes.join(","));
+  }
   if (elements.searchFilter.value.trim()) {
     params.set("busca", elements.searchFilter.value.trim());
   }
@@ -528,6 +559,7 @@ async function loadDashboard() {
   }
   state.data = data;
   state.autoRefreshMs = Math.max(30000, Number(data.autoRefreshSeconds || 300) * 1000);
+  renderRouteFilter(data.availableRoutes || [], data.filters?.pops || selectedRoutes);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
   state.selectedScheduleIds = new Set(
     [...state.selectedScheduleIds].filter((id) => state.schedulesById.has(id))
@@ -1007,6 +1039,9 @@ function wireEvents() {
   elements.prevWeekButton.addEventListener("click", () => navigateWeek(-7));
   elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
   elements.statusFilter.addEventListener("change", refreshDashboard);
+  if (elements.routeFilter) {
+    elements.routeFilter.addEventListener("change", refreshDashboard);
+  }
   elements.startDateFilter.addEventListener("change", refreshDashboard);
   elements.endDateFilter.addEventListener("change", refreshDashboard);
   elements.searchFilter.addEventListener("input", debounce(refreshDashboard, 250));
