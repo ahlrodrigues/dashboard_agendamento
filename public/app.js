@@ -2,7 +2,11 @@ const state = {
   data: null,
   schedulesById: new Map(),
   selectedScheduleIds: new Set(),
-  sendingConfirmation: false
+  sendingConfirmation: false,
+  pendingMutations: 0,
+  autoRefreshTimer: null,
+  autoRefreshMs: 300000,
+  refreshing: false
 };
 
 const summaryConfig = [
@@ -452,6 +456,7 @@ async function loadDashboard() {
     throw new Error(data.message || "Nao foi possivel atualizar o dashboard.");
   }
   state.data = data;
+  state.autoRefreshMs = Math.max(30000, Number(data.autoRefreshSeconds || 300) * 1000);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
   state.selectedScheduleIds = new Set(
     [...state.selectedScheduleIds].filter((id) => state.schedulesById.has(id))
@@ -472,8 +477,32 @@ async function loadDashboard() {
   }
 }
 
-async function refreshDashboard() {
-  if (elements.refreshButton) {
+function scheduleNextAutoRefresh() {
+  if (state.autoRefreshTimer) {
+    window.clearTimeout(state.autoRefreshTimer);
+  }
+  state.autoRefreshTimer = window.setTimeout(() => {
+    void autoRefreshDashboard();
+  }, state.autoRefreshMs);
+}
+
+async function autoRefreshDashboard() {
+  if (document.hidden || state.pendingMutations > 0 || state.sendingConfirmation || state.refreshing) {
+    scheduleNextAutoRefresh();
+    return;
+  }
+
+  await refreshDashboard({ silent: true });
+}
+
+async function refreshDashboard(options = {}) {
+  const silent = Boolean(options.silent);
+  if (state.refreshing) {
+    return;
+  }
+  state.refreshing = true;
+
+  if (elements.refreshButton && !silent) {
     elements.refreshButton.disabled = true;
     elements.refreshButton.textContent = "Atualizando...";
   }
@@ -484,7 +513,9 @@ async function refreshDashboard() {
     console.error(error);
     elements.noticeArea.innerHTML = `<div class="notice">Falha ao atualizar o dashboard: ${escapeHtml(error.message)}</div>`;
   } finally {
-    if (elements.refreshButton) {
+    state.refreshing = false;
+    scheduleNextAutoRefresh();
+    if (elements.refreshButton && !silent) {
       elements.refreshButton.disabled = false;
       elements.refreshButton.textContent = "Atualizar";
     }
@@ -563,6 +594,7 @@ async function submitCancelSchedule(event) {
 
   const btn = elements.cancelScheduleForm.querySelector("button[type=submit]");
   btn.disabled = true;
+  state.pendingMutations += 1;
 
   try {
     const response = await fetch("/api/agendamentos/delete", {
@@ -578,6 +610,7 @@ async function submitCancelSchedule(event) {
   } catch (error) {
     alert(error.message);
   } finally {
+    state.pendingMutations = Math.max(0, state.pendingMutations - 1);
     btn.disabled = false;
   }
 }
@@ -624,6 +657,7 @@ async function sendSelectedConfirmations(event) {
   }
 
   state.sendingConfirmation = true;
+  state.pendingMutations += 1;
   updateSelectionControls();
 
   try {
@@ -665,6 +699,7 @@ async function sendSelectedConfirmations(event) {
     alert(error.message);
   } finally {
     state.sendingConfirmation = false;
+    state.pendingMutations = Math.max(0, state.pendingMutations - 1);
     updateSelectionControls();
   }
 }
@@ -673,6 +708,7 @@ async function persistSchedulePayload({ payload, endpoint, editing, button, onSu
   if (button) {
     button.disabled = true;
   }
+  state.pendingMutations += 1;
 
   try {
     const response = await fetch(endpoint, {
@@ -692,6 +728,7 @@ async function persistSchedulePayload({ payload, endpoint, editing, button, onSu
   } catch (error) {
     await onError(error);
   } finally {
+    state.pendingMutations = Math.max(0, state.pendingMutations - 1);
     if (button) {
       button.disabled = false;
     }
@@ -938,6 +975,12 @@ function wireEvents() {
   if (elements.cancelScheduleForm) {
     elements.cancelScheduleForm.addEventListener("submit", submitCancelSchedule);
   }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      scheduleNextAutoRefresh();
+      void autoRefreshDashboard();
+    }
+  });
 }
 
 function navigateWeek(offsetDays) {

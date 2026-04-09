@@ -1612,6 +1612,7 @@ async function getDashboardData(query) {
   return {
     ok: true,
     generatedAt: new Date().toISOString(),
+    autoRefreshSeconds: Number(config.dashboard.atualizacao_segundos || 300),
     selectedDate,
     period: {
       startDate,

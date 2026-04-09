@@ -7,6 +7,8 @@ cd "$BASE_DIR"
 
 LOG_FILE="${DASHBOARD_LOG_FILE:-$BASE_DIR/dashboard_server.log}"
 PID_FILE="${DASHBOARD_PID_FILE:-$BASE_DIR/dashboard_server.pid}"
+SERVER_SCRIPT="${DASHBOARD_SERVER_SCRIPT:-$BASE_DIR/server.js}"
+NODE_BIN="${DASHBOARD_NODE_BIN:-node}"
 
 if [[ -f "$PID_FILE" ]]; then
   OLD_PID="$(cat "$PID_FILE" || true)"
@@ -16,6 +18,16 @@ if [[ -f "$PID_FILE" ]]; then
     sleep 2
   fi
   rm -f "$PID_FILE"
+fi
+
+STALE_PIDS="$(pgrep -f "$NODE_BIN $SERVER_SCRIPT" || true)"
+if [[ -n "${STALE_PIDS:-}" ]]; then
+  while IFS= read -r pid; do
+    [[ -z "${pid:-}" ]] && continue
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Encerrando instancia antiga sem pid file (pid=${pid})" >> "$LOG_FILE"
+    kill "$pid" || true
+  done <<< "$STALE_PIDS"
+  sleep 2
 fi
 
 bash "$BASE_DIR/garantir_dashboard_server.sh"
