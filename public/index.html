@@ -69,11 +69,11 @@
         </label>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2 id="scheduleFormTitle">Novo Agendamento</h2>
-          <span id="writeModeBadge" class="badge neutral">Carregando</span>
-        </div>
+	      <section class="panel">
+	        <div class="panel-header">
+	          <h2 id="scheduleFormTitle">Novo Agendamento</h2>
+	          <span id="writeModeBadge" class="badge neutral">Carregando</span>
+	        </div>
 
         <form id="scheduleForm" class="stack-form">
           <input name="id" type="hidden" />
@@ -123,7 +123,8 @@
 
             <label class="field">
               <span>Horario</span>
-              <input name="horario" type="text" inputmode="numeric" placeholder="HH:MM:SS" pattern="^\d{2}:\d{2}(:\d{2})?$" required />
+              <input name="horario" type="time" step="1" required />
+              <small id="slotConflictHint" class="field-hint" aria-live="polite"></small>
             </label>
           </div>
 
@@ -141,9 +142,50 @@
             <button id="scheduleSubmitButton" class="primary-button" type="submit">Salvar</button>
             <button id="cancelEditButton" class="ghost-button" type="button" style="display: none;">Cancelar edicao</button>
           </div>
-        </form>
-      </section>
-    </aside>
+	        </form>
+	      </section>
+
+	      <section class="panel">
+	        <div class="panel-header">
+	          <h2>Bloqueio de horario</h2>
+	          <span class="badge neutral">Sem OS</span>
+	        </div>
+
+	        <form id="blockSlotForm" class="stack-form">
+	          <label class="field">
+	            <span>POP</span>
+	            <select name="rota" id="blockRotaSelect" required></select>
+	          </label>
+
+	          <label class="field">
+	            <span>Data</span>
+	            <input name="data" type="date" required />
+	          </label>
+
+	          <div class="field-row">
+	            <label class="field">
+	              <span>Horario inicial</span>
+	              <input name="horario_inicio" type="time" step="1" required />
+	            </label>
+
+	            <label class="field">
+	              <span>Horario final</span>
+	              <input name="horario_fim" type="time" step="1" required />
+	            </label>
+	          </div>
+
+	          <label class="field">
+	            <span>Motivo (opcional)</span>
+	            <input name="motivo" type="text" />
+	            <small id="blockSlotHint" class="field-hint" aria-live="polite"></small>
+	          </label>
+
+	          <div class="modal-actions">
+	            <button id="blockSlotSubmitButton" class="primary-button" type="submit">Bloquear horario</button>
+	          </div>
+	        </form>
+	      </section>
+	    </aside>
 
     <main class="content">
       <header class="hero">
@@ -251,11 +293,11 @@
                 <span>Data Agendamento</span>
                 <input name="data" id="editData" type="date" required />
               </label>
-              <label class="field">
-                <span>Horário Problema Reportado</span>
-                <input name="horario" id="editHorario" type="text" inputmode="numeric" placeholder="HH:MM:SS" pattern="^\d{2}:\d{2}(:\d{2})?$" />
-              </label>
-            </div>
+	              <label class="field">
+	                <span>Horário Problema Reportado</span>
+	                <input name="horario" id="editHorario" type="time" step="1" />
+	              </label>
+	            </div>
 
             <label class="field">
               <span>Observação Interna</span>

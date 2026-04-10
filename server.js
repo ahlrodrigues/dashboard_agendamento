@@ -11,6 +11,7 @@ const DATA_DIR = path.join(BASE_DIR, "data");
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const CONFIG_LOCAL_PATH = path.join(BASE_DIR, "config.local.json");
 const MANUAL_SCHEDULES_PATH = path.join(DATA_DIR, "manual-agendamentos.json");
+const BLOCKED_SLOTS_PATH = path.join(DATA_DIR, "blocked-slots.json");
 const CONFIRMATION_DISPATCH_LOG_PATH = path.join(DATA_DIR, "confirmation-dispatch-log.json");
 
 const DEFAULT_STATUSES = [0, 1];
@@ -33,6 +34,9 @@ function ensureDataDir() {
   if (!fs.existsSync(MANUAL_SCHEDULES_PATH)) {
     fs.writeFileSync(MANUAL_SCHEDULES_PATH, "[]\n", "utf8");
   }
+  if (!fs.existsSync(BLOCKED_SLOTS_PATH)) {
+    fs.writeFileSync(BLOCKED_SLOTS_PATH, "[]\n", "utf8");
+  }
   if (!fs.existsSync(CONFIRMATION_DISPATCH_LOG_PATH)) {
     fs.writeFileSync(CONFIRMATION_DISPATCH_LOG_PATH, "{}\n", "utf8");
   }
@@ -48,6 +52,81 @@ function readJson(filePath, fallback = null) {
 
 function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+}
+
+function readBlockedSlots() {
+  const data = readJson(BLOCKED_SLOTS_PATH, []);
+  return Array.isArray(data) ? data : [];
+}
+
+function writeBlockedSlots(items) {
+  writeJson(BLOCKED_SLOTS_PATH, Array.isArray(items) ? items : []);
+}
+
+function normalizeBlockedSlot(entry) {
+  const rota = String(entry.rota || "").trim() || "Sem POP";
+  const data = isoDateOnly(entry.data);
+  const start = hhmm(entry.horario_inicio || entry.horario);
+  const end = hhmm(entry.horario_fim || entry.horario);
+  const motivo = String(entry.motivo || entry.observacao || "").trim();
+  const slotTime = hhmm(entry.__slot_time || "");
+  const rangeLabel = start && end && start !== end ? `${start}-${end}` : (start || end);
+  const horario = slotTime ? normalizeSlot(slotTime) : normalizeSlot(rangeLabel);
+  const observacao = slotTime
+    ? [rangeLabel ? `Bloqueio: ${rangeLabel}` : "", motivo].filter(Boolean).join(" · ")
+    : motivo;
+
+  return {
+    id: entry.id || `block-${cryptoRandomId()}`,
+    osId: "",
+    protocolo: "",
+    cliente: "Horario bloqueado",
+    contrato: "",
+    telefone: "",
+    rota,
+    tecnico: "",
+    data,
+    horario,
+    hasScheduledDate: Boolean(data),
+    status: "bloqueado",
+    clienteUrl: "",
+    confirmationUrl: "",
+    confirmationStatus: "sem_confirmacao",
+    confirmationTitle: "",
+    confirmationSent: false,
+    confirmationRequestedAt: "",
+    endereco: "",
+    observacao,
+    origem: "bloqueio",
+    raw: entry
+  };
+}
+
+function saveBlockedSlot(entry) {
+  const items = readBlockedSlots();
+  const saved = {
+    id: String(entry.id || "").trim() || `block-${Date.now()}`,
+    rota: String(entry.rota || "").trim(),
+    data: isoDateOnly(entry.data),
+    horario_inicio: hhmm(entry.horario_inicio || entry.horario),
+    horario_fim: hhmm(entry.horario_fim || entry.horario),
+    motivo: String(entry.motivo || "").trim(),
+    created_at: entry.created_at || new Date().toISOString()
+  };
+  items.push(saved);
+  writeBlockedSlots(items);
+  return saved;
+}
+
+function deleteBlockedSlot(id) {
+  const items = readBlockedSlots();
+  const normalizedId = String(id || "").trim();
+  const next = items.filter((item) => String(item.id || "").trim() !== normalizedId);
+  if (next.length === items.length) {
+    return false;
+  }
+  writeBlockedSlots(next);
+  return true;
 }
 
 function loadConfig() {
@@ -1819,6 +1898,37 @@ async function getDashboardData(query) {
     readManualSchedules().map(normalizeManualSchedule)
   );
   schedules = schedules.concat(manualSchedules);
+
+  const slotTimesForBlocks = Array.from(
+    new Set(
+      schedules
+        .map((item) => String(item.horario || "").trim())
+        .concat(slots)
+        .filter((value) => value && value !== "A definir")
+        .map((value) => normalizeSlot(value))
+        .filter((value) => value && value !== "A definir")
+    )
+  ).sort(compareSlots);
+
+  const blockedExpanded = [];
+  for (const block of readBlockedSlots()) {
+    const blockDate = isoDateOnly(block.data);
+    if (!blockDate) continue;
+    const start = hhmm(block.horario_inicio || block.horario);
+    const end = hhmm(block.horario_fim || block.horario);
+    for (const time of slotTimesForBlocks) {
+      if (timeInRangeInclusive(time, start, end)) {
+        blockedExpanded.push(
+          normalizeBlockedSlot({
+            ...block,
+            __slot_time: time
+          })
+        );
+      }
+    }
+  }
+  schedules = schedules.concat(blockedExpanded);
+
   schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
 
@@ -1974,6 +2084,230 @@ async function closeSgpSchedule(config, osId) {
   };
 }
 
+function normalizePopKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeConflictTime(value) {
+  return hhmm(value);
+}
+
+function compareTimes(a, b) {
+  return String(a || "").localeCompare(String(b || ""));
+}
+
+function timeInRangeInclusive(time, start, end) {
+  const t = hhmm(time);
+  const s = hhmm(start);
+  const e = hhmm(end);
+  if (!t || !s) {
+    return false;
+  }
+  if (!e || e === s) {
+    return t === s;
+  }
+  return compareTimes(t, s) >= 0 && compareTimes(t, e) <= 0;
+}
+
+function intervalsOverlapInclusive(aStart, aEnd, bStart, bEnd) {
+  const as = hhmm(aStart);
+  const ae = hhmm(aEnd) || as;
+  const bs = hhmm(bStart);
+  const be = hhmm(bEnd) || bs;
+  if (!as || !bs) {
+    return false;
+  }
+  return compareTimes(as, be) <= 0 && compareTimes(bs, ae) <= 0;
+}
+
+function summarizeConflictItems(items) {
+  return (items || [])
+    .slice(0, 3)
+    .map((item) => {
+      const ref = String(item.osId || item.protocolo || "").trim();
+      const label = ref ? `OS ${ref}` : "OS";
+      const client = String(item.cliente || "").trim();
+      const status = String(item.status || "").trim();
+      return `${label}${client ? ` (${client})` : ""}${status ? ` [${status}]` : ""}`;
+    })
+    .join(", ");
+}
+
+async function createBlockedSlot(payload) {
+  const config = loadConfig();
+  const entry = {
+    rota: String(payload.rota || payload.pop || "").trim(),
+    data: isoDateOnly(payload.data),
+    horario_inicio: hhmm(payload.horario_inicio || payload.horarioInicial || payload.horario || ""),
+    horario_fim: hhmm(payload.horario_fim || payload.horarioFinal || payload.horario || ""),
+    motivo: String(payload.motivo || payload.observacao || "").trim()
+  };
+
+  if (!entry.rota || !entry.data || !entry.horario_inicio || !entry.horario_fim) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Informe POP, data, horario inicial e horario final para bloquear."
+      }
+    };
+  }
+
+  if (compareTimes(entry.horario_fim, entry.horario_inicio) < 0) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        message: "Horario final deve ser maior ou igual ao horario inicial."
+      }
+    };
+  }
+
+  const normalizedRotaKey = normalizePopKey(entry.rota);
+  const existingBlock = readBlockedSlots().find((item) => {
+    if (normalizePopKey(item.rota) !== normalizedRotaKey) return false;
+    if (isoDateOnly(item.data) !== entry.data) return false;
+    return intervalsOverlapInclusive(
+      item.horario_inicio || item.horario,
+      item.horario_fim || item.horario,
+      entry.horario_inicio,
+      entry.horario_fim
+    );
+  });
+  if (existingBlock) {
+    return {
+      statusCode: 409,
+      body: {
+        ok: false,
+        code: "SLOT_ALREADY_BLOCKED",
+        message: `Ja existe bloqueio em ${entry.rota} para ${entry.data} nesse intervalo de horario.`,
+        block: normalizeBlockedSlot(existingBlock)
+      }
+    };
+  }
+
+  // Se houver qualquer OS no intervalo, nao permite criar bloqueio.
+  const candidateTimes = [entry.horario_inicio, entry.horario_fim].filter(Boolean);
+  for (const timeKey of candidateTimes) {
+    const conflictCheck = await findPopSlotConflicts(config, { rota: entry.rota, data: entry.data, horario: timeKey }, { includeBlocks: false });
+    if (conflictCheck.conflicts.length) {
+      const summary = summarizeConflictItems(conflictCheck.conflicts);
+      return {
+        statusCode: 409,
+        body: {
+          ok: false,
+          code: "SLOT_OCCUPIED",
+          message: `Ja existe agendamento em ${entry.rota} para ${entry.data} dentro do intervalo informado.`,
+          conflicts: conflictCheck.conflicts.slice(0, 5).map(serializeSchedule),
+          detail: summary ? `Conflitos: ${summary}` : "",
+          checkedSgp: Boolean(conflictCheck.checkedSgp)
+        }
+      };
+    }
+  }
+
+  const saved = saveBlockedSlot({
+    id: `block-${Date.now()}`,
+    ...entry,
+    created_at: new Date().toISOString()
+  });
+
+  return {
+    statusCode: 201,
+    body: {
+      ok: true,
+      message: `Horario bloqueado em ${entry.rota} para ${entry.data} (${entry.horario_inicio}-${entry.horario_fim}).`,
+      block: normalizeBlockedSlot(saved)
+    }
+  };
+}
+
+async function removeBlockedSlot(payload) {
+  const id = String(payload.id || "").trim();
+  if (!id) {
+    return {
+      statusCode: 400,
+      body: { ok: false, message: "Bloqueio nao informado." }
+    };
+  }
+  const removed = deleteBlockedSlot(id);
+  return removed
+    ? { statusCode: 200, body: { ok: true, message: "Bloqueio removido com sucesso." } }
+    : { statusCode: 404, body: { ok: false, message: "Bloqueio nao encontrado." } };
+}
+
+async function findPopSlotConflicts(
+  config,
+  { rota, data, horario },
+  { ignoreId = "", ignoreOsId = "", ignoreProtocolo = "", includeBlocks = true } = {}
+) {
+  const rotaKey = normalizePopKey(rota);
+  const dateKey = isoDateOnly(data);
+  const timeKey = normalizeConflictTime(horario);
+
+  if (!rotaKey || !dateKey || !timeKey) {
+    return { conflicts: [], checkedSgp: false };
+  }
+
+  const ignore = {
+    id: String(ignoreId || "").trim(),
+    osId: String(ignoreOsId || "").trim(),
+    protocolo: String(ignoreProtocolo || "").trim()
+  };
+
+  const schedules = [];
+  let checkedSgp = false;
+
+  try {
+    const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey });
+    checkedSgp = true;
+    schedules.push(
+      ...sgpRows
+        .filter((item) => isOpenServiceOrder(item))
+        .map((item) => normalizeSchedule(config, item, "sgp"))
+        .filter((item) => item.data && item.horario && item.horario !== "A definir")
+    );
+  } catch (error) {
+    checkedSgp = false;
+  }
+
+  schedules.push(...readManualSchedules().map(normalizeManualSchedule).filter((item) => item.data));
+  const blocked = includeBlocks ? readBlockedSlots() : [];
+
+  const conflicts = schedules.filter((item) => {
+    if (ignore.id && String(item.id || "").trim() === ignore.id) {
+      return false;
+    }
+    if (ignore.osId && String(item.osId || "").trim() === ignore.osId) {
+      return false;
+    }
+    if (ignore.protocolo && String(item.protocolo || "").trim() === ignore.protocolo) {
+      return false;
+    }
+
+    const itemRotaKey = normalizePopKey(item.rota);
+    const itemDateKey = isoDateOnly(item.data);
+    const itemTimeKey = normalizeConflictTime(item.horario);
+    return itemRotaKey === rotaKey && itemDateKey === dateKey && itemTimeKey === timeKey;
+  });
+
+  if (includeBlocks && blocked.length) {
+    const blockMatches = blocked.filter((entry) => {
+      if (normalizePopKey(entry.rota) !== rotaKey) return false;
+      if (isoDateOnly(entry.data) !== dateKey) return false;
+      return timeInRangeInclusive(timeKey, entry.horario_inicio || entry.horario, entry.horario_fim || entry.horario);
+    });
+    for (const match of blockMatches) {
+      conflicts.push(normalizeBlockedSlot(match));
+    }
+  }
+
+  return { conflicts, checkedSgp };
+}
+
 async function createSchedule(payload) {
   const config = loadConfig();
   const entry = {
@@ -1995,6 +2329,23 @@ async function createSchedule(payload) {
       body: {
         ok: false,
         message: "Informe pelo menos cliente, contrato, data e horario."
+      }
+    };
+  }
+
+  const conflictCheck = await findPopSlotConflicts(config, entry);
+  if (conflictCheck.conflicts.length) {
+    const rotaLabel = String(entry.rota || "").trim() || "POP";
+    const summary = summarizeConflictItems(conflictCheck.conflicts);
+    return {
+      statusCode: 409,
+      body: {
+        ok: false,
+        code: "SLOT_OCCUPIED",
+        message: `Horario ocupado em ${rotaLabel} para ${entry.data} ${entry.horario}.`,
+        conflicts: conflictCheck.conflicts.slice(0, 5).map(serializeSchedule),
+        detail: summary ? `Conflitos: ${summary}` : "",
+        checkedSgp: Boolean(conflictCheck.checkedSgp)
       }
     };
   }
@@ -2084,6 +2435,7 @@ async function createSchedule(payload) {
 }
 
 async function updateSchedule(payload) {
+  const config = loadConfig();
   const id = String(payload.id || "").trim();
   const origem = String(payload.origem || "").trim();
   const osId = String(payload.osId || "").trim();
@@ -2120,6 +2472,27 @@ async function updateSchedule(payload) {
     };
   }
 
+  const conflictCheck = await findPopSlotConflicts(config, entry, {
+    ignoreId: id,
+    ignoreOsId: osId,
+    ignoreProtocolo: String(payload.protocolo || "").trim()
+  });
+  if (conflictCheck.conflicts.length) {
+    const rotaLabel = String(entry.rota || "").trim() || "POP";
+    const summary = summarizeConflictItems(conflictCheck.conflicts);
+    return {
+      statusCode: 409,
+      body: {
+        ok: false,
+        code: "SLOT_OCCUPIED",
+        message: `Horario ocupado em ${rotaLabel} para ${entry.data} ${entry.horario}.`,
+        conflicts: conflictCheck.conflicts.slice(0, 5).map(serializeSchedule),
+        detail: summary ? `Conflitos: ${summary}` : "",
+        checkedSgp: Boolean(conflictCheck.checkedSgp)
+      }
+    };
+  }
+
   if (origem === "pre_agendamento_local") {
     const updated = updateManualSchedule(id, entry);
     return updated
@@ -2152,7 +2525,6 @@ async function updateSchedule(payload) {
       };
     }
 
-    const config = loadConfig();
     if (!String(config.basic_auth?.username || "").trim() || !String(config.basic_auth?.password || "").trim()) {
       return {
         statusCode: 501,
@@ -2556,6 +2928,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/delete") {
       const payload = await collectRequestBody(req);
       const result = await deleteSchedule(payload);
+      sendJson(res, result.statusCode, result.body);
+      return;
+    }
+
+    if (req.method === "POST" && parsedUrl.pathname === "/api/bloqueios") {
+      const payload = await collectRequestBody(req);
+      const result = await createBlockedSlot(payload);
+      sendJson(res, result.statusCode, result.body);
+      return;
+    }
+
+    if (req.method === "POST" && parsedUrl.pathname === "/api/bloqueios/delete") {
+      const payload = await collectRequestBody(req);
+      const result = await removeBlockedSlot(payload);
       sendJson(res, result.statusCode, result.body);
       return;
     }
