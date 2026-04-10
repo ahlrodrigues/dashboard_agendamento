@@ -10,6 +10,7 @@ const PUBLIC_DIR = path.join(BASE_DIR, "public");
 const DATA_DIR = path.join(BASE_DIR, "data");
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const CONFIG_LOCAL_PATH = path.join(BASE_DIR, "config.local.json");
+const PACKAGE_PATH = path.join(BASE_DIR, "package.json");
 const MANUAL_SCHEDULES_PATH = path.join(DATA_DIR, "manual-agendamentos.json");
 const BLOCKED_SLOTS_PATH = path.join(DATA_DIR, "blocked-slots.json");
 const CONFIRMATION_DISPATCH_LOG_PATH = path.join(DATA_DIR, "confirmation-dispatch-log.json");
@@ -28,6 +29,16 @@ let sgpDispatchQueue = Promise.resolve();
 let lastSgpDispatchAt = 0;
 let confirmationResendJobTimer = null;
 let confirmationResendJobRunning = false;
+
+const DASHBOARD_VERSION = (() => {
+  try {
+    const pkg = readJson(PACKAGE_PATH, {});
+    const version = String(pkg?.version || "").trim();
+    return version || "dev";
+  } catch (error) {
+    return "dev";
+  }
+})();
 
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1942,6 +1953,7 @@ async function getDashboardData(query) {
   return {
     ok: true,
     generatedAt: new Date().toISOString(),
+    dashboardVersion: DASHBOARD_VERSION,
     autoRefreshSeconds: Number(config.dashboard.atualizacao_segundos || 300),
     selectedDate,
     period: {
@@ -2895,7 +2907,7 @@ const server = http.createServer(async (req, res) => {
     const normalizedPathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
 
     if (req.method === "GET" && parsedUrl.pathname === "/api/health") {
-      sendJson(res, 200, { ok: true, service: "dashboard-agendamento-sgp" });
+      sendJson(res, 200, { ok: true, service: "dashboard-agendamento-sgp", version: DASHBOARD_VERSION });
       return;
     }
 

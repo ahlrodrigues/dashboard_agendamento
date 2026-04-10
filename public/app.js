@@ -700,7 +700,11 @@ function renderTable(rows) {
 }
 
 function updateMeta(data) {
-  elements.snapshotLabel.textContent = `Atualizado em ${formatDateTime(data.generatedAt)}`;
+  const rawVersion = String(data.dashboardVersion || data.version || "").trim();
+  const versionLabel = rawVersion ? (rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`) : "";
+  elements.snapshotLabel.innerHTML = versionLabel
+    ? `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}<br /><span class="dash-version">Versao ${escapeHtml(versionLabel)}</span>`
+    : `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}`;
   elements.sourceBadge.className = `badge ${badgeClassForSource(data.sourceMode)}`;
   elements.sourceBadge.textContent = sourceLabel(data.sourceMode);
   elements.weekRange.textContent = `${formatDate(data.period.weekStart)} ate ${formatDate(data.period.weekEnd)}`;
