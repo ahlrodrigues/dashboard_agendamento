@@ -1373,8 +1373,11 @@ function normalizeStatus(raw) {
   ) !== "A definir";
   const hasAssignedTechnician = hasMeaningfulTechnician(normalizeTechnician(raw));
 
-  if (text.includes("agend") && hasScheduleDate && hasScheduleTime && hasAssignedTechnician) {
-    return "agendado";
+  // Regra do dashboard:
+  // - Itinerario: possui data + tecnico responsavel (sem horario definido)
+  // - Agendamentos: possui data + tecnico responsavel + horario definido
+  if (hasScheduleDate && hasAssignedTechnician) {
+    return hasScheduleTime ? "agendado" : "itinerario";
   }
   return "pre_agendado";
 }
@@ -1682,7 +1685,7 @@ function buildGrid(schedules, selectedDate, slots) {
   const dynamicSlots = new Set(slots);
   for (const item of schedules) {
     if (days.includes(item.data)) {
-      dynamicSlots.add(item.horario || "A definir");
+      dynamicSlots.add(item.status === "itinerario" ? "Itinerario" : (item.horario || "A definir"));
     }
   }
   const mergedSlots = Array.from(dynamicSlots).sort(compareSlots);
@@ -1698,7 +1701,7 @@ function buildGrid(schedules, selectedDate, slots) {
     if (!cells[item.data]) {
       continue;
     }
-    const slot = item.horario || "A definir";
+    const slot = item.status === "itinerario" ? "Itinerario" : (item.horario || "A definir");
     if (!cells[item.data][slot]) {
       cells[item.data][slot] = [];
     }
@@ -1716,6 +1719,12 @@ function buildGrid(schedules, selectedDate, slots) {
 }
 
 function compareSlots(a, b) {
+  if (a === "Itinerario") {
+    return -1;
+  }
+  if (b === "Itinerario") {
+    return 1;
+  }
   if (a === "A definir") {
     return 1;
   }
@@ -1729,6 +1738,7 @@ function summarizeSchedules(schedules) {
   const summary = {
     total: schedules.length,
     agendado: 0,
+    itinerario: 0,
     pre_agendado: 0,
     sem_solicitacao: 0,
     na_fila_envio: 0,

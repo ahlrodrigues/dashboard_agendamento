@@ -11,7 +11,8 @@ const state = {
 };
 
 const summaryConfig = [
-  { key: "agendado", label: "Agendadas", className: "blue" },
+  { key: "agendado", label: "Agendamentos", className: "blue" },
+  { key: "itinerario", label: "Itinerario", className: "indigo" },
   { key: "pre_agendado", label: "Pre-agendadas", className: "amber" },
   { key: "sem_solicitacao", label: "Sem solicitacao", className: "slate" },
   { key: "na_fila_envio", label: "Na fila", className: "gold" },
@@ -664,7 +665,8 @@ function markScheduleFormForSgpEdit(osId) {
 function statusLabel(status) {
   const map = {
     disponivel: "Pre-agendada",
-    agendado: "Agendada",
+    agendado: "Agendamento",
+    itinerario: "Itinerario",
     pre_agendado: "Pre-agendada",
     indisponivel: "Pre-agendada",
     bloqueado: "Bloqueado",
