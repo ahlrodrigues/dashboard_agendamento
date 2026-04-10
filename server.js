@@ -162,6 +162,9 @@ function loadConfig() {
       motivo_os_padrao: 1,
       setor_padrao: 1,
       prioridade_os_padrao: 2,
+      // Valor numérico conforme o cadastro do SGP (ex.: 1 = Alta em muitos ambientes).
+      // Se 0/undefined, mantém a prioridade atual/padrão.
+      prioridade_os_ao_agendar: 1,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
       ...(config.agendamento || {})
@@ -713,6 +716,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
   const session = await createSgpWebSession(config);
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
+  const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const smsClientValues = pickSmsClientValues(html, entry.telefone);
   const gatewayValue = pickGatewayValue(
     html,
@@ -724,7 +728,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
     setor: extractHtmlFieldValue(html, "setor") || "1",
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
-    prioridade: extractHtmlFieldValue(html, "prioridade") || "2",
+    prioridade: forcedPriority != null ? String(forcedPriority) : (extractHtmlFieldValue(html, "prioridade") || "2"),
     data_agendamento: toBrazilDateTime(entry.data, entry.horario),
     data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
     data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
@@ -2013,8 +2017,23 @@ function currentDateTimeForSgp() {
   return `${parts.join("-")} ${time.join(":")}`;
 }
 
+function resolvePriorityForScheduledOs(config, entry) {
+  const desired = Number(config.agendamento?.prioridade_os_ao_agendar);
+  if (!Number.isFinite(desired) || desired <= 0) {
+    return null;
+  }
+  if (!entry?.data || !entry?.horario || entry.horario === "A definir") {
+    return null;
+  }
+  if (!hasMeaningfulTechnician(entry.tecnico)) {
+    return null;
+  }
+  return desired;
+}
+
 function buildCreateCallPayload(config, entry) {
   const content = `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
+  const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const payload = {
     contrato: entry.contrato,
     conteudo: content,
@@ -2023,7 +2042,7 @@ function buildCreateCallPayload(config, entry) {
     ocorrenciatipo: Number(config.agendamento?.ocorrencia_tipo_padrao || 5),
     motivoos: Number(config.agendamento?.motivo_os_padrao || 1),
     setor: Number(config.agendamento?.setor_padrao || 1),
-    os_prioridade: Number(config.agendamento?.prioridade_os_padrao || 2),
+    os_prioridade: forcedPriority ?? Number(config.agendamento?.prioridade_os_padrao || 2),
     contato_nome: entry.cliente,
     contato_telefone: entry.telefone || "",
     data_hora_agendamento: toScheduledDateTime(entry.data, entry.horario)
@@ -2559,13 +2578,15 @@ async function updateSchedule(payload) {
       };
     }
 
-	    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
-	    const sgpPayload = {
-	      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
-	      // Observação interna (SGP)
-	      observacao: entry.justificativa || entry.observacao || "",
-	      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
-	    };
+		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
+		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+		    const sgpPayload = {
+		      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+		      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
+		      // Observação interna (SGP)
+		      observacao: entry.justificativa || entry.observacao || "",
+		      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
+		    };
 
     logSgpScheduleUpdate("request", { osId, endpoint, payload: sgpPayload });
 

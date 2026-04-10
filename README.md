@@ -67,6 +67,7 @@ Observacao:
 
 - o projeto pode continuar usando `basic_auth` para leitura normal
 - para alterar data/horario de OS aberta no SGP, preencha tambem `app_token_auth.app` e `app_token_auth.token`
+- ao agendar com data+horario+tecnico, o backend pode forcar a prioridade da OS para alta usando `agendamento.prioridade_os_ao_agendar` (padrao `1`). Para desativar, defina `0`.
 
 ## Como executar
 

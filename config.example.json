@@ -33,6 +33,7 @@
     "motivo_os_padrao": 1,
     "setor_padrao": 1,
     "prioridade_os_padrao": 2,
+    "prioridade_os_ao_agendar": 1,
     "statuses_consulta": [
       0,
       1
