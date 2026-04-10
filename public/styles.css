@@ -196,6 +196,28 @@ p {
   color: #9a2824;
 }
 
+.route-mode-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 2px 0 4px;
+  flex-wrap: wrap;
+}
+
+.route-mode-toggle .radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.route-mode-toggle input[type="radio"] {
+  accent-color: var(--blue);
+}
+
 .field-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

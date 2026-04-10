@@ -60,6 +60,16 @@
 
         <label class="field">
           <span>POP</span>
+          <div class="route-mode-toggle" role="group" aria-label="Modo do filtro POP">
+            <label class="radio-option">
+              <input id="routeModeTechnician" type="radio" name="routeMode" value="technician" checked />
+              Técnico
+            </label>
+            <label class="radio-option">
+              <input id="routeModePop" type="radio" name="routeMode" value="pop" />
+              POP
+            </label>
+          </div>
           <select id="routeFilter" multiple size="5"></select>
           <small class="field-hint">Segure `Ctrl` para selecionar mais de um POP.</small>
         </label>

@@ -29,6 +29,8 @@ const elements = {
   startDateFilter: document.querySelector("#startDateFilter"),
   endDateFilter: document.querySelector("#endDateFilter"),
   statusFilter: document.querySelector("#statusFilter"),
+  routeModeTechnician: document.querySelector("#routeModeTechnician"),
+  routeModePop: document.querySelector("#routeModePop"),
   routeFilter: document.querySelector("#routeFilter"),
   searchFilter: document.querySelector("#searchFilter"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -93,6 +95,13 @@ function hhmm(value) {
 }
 
 function normalizePopKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeTechnicianKey(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
@@ -425,6 +434,96 @@ function matchesCurrentFilters(item) {
 
 function getSelectedRoutes() {
   return Array.from(elements.routeFilter?.selectedOptions || []).map((option) => String(option.value || "").trim()).filter(Boolean);
+}
+
+function isTechnicianRouteModeEnabled() {
+  return Boolean(elements.routeModeTechnician?.checked);
+}
+
+function collectSchedulesFromGrid() {
+  const grid = state.data?.grid;
+  if (!grid?.cells) {
+    return [];
+  }
+  const byId = new Map();
+  for (const day of Object.keys(grid.cells || {})) {
+    const slots = grid.cells[day] || {};
+    for (const slot of Object.keys(slots || {})) {
+      const items = slots[slot] || [];
+      for (const item of items) {
+        const id = String(item?.id || "").trim();
+        if (!id || byId.has(id)) {
+          continue;
+        }
+        byId.set(id, item);
+      }
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function findTechnicianForPop(selectedPop) {
+  const popKey = normalizePopKey(selectedPop);
+  if (!popKey) {
+    return "";
+  }
+  const candidates = new Map();
+  for (const item of collectSchedulesFromGrid()) {
+    if (item?.origem === "bloqueio" || item?.status === "bloqueado") {
+      continue;
+    }
+    if (normalizePopKey(item?.rota) !== popKey) {
+      continue;
+    }
+    const technicianName = getDisplayTechnicianName(item?.tecnico);
+    if (!technicianName) {
+      continue;
+    }
+    const technicianKey = normalizeTechnicianKey(technicianName);
+    const current = candidates.get(technicianKey) || { count: 0, name: technicianName };
+    current.count += 1;
+    current.name = current.name || technicianName;
+    candidates.set(technicianKey, current);
+  }
+  let best = null;
+  for (const entry of candidates.values()) {
+    if (!best || entry.count > best.count) {
+      best = entry;
+    }
+  }
+  return best?.name || "";
+}
+
+function findPopsForTechnician(technicianName) {
+  const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(technicianName));
+  if (!technicianKey) {
+    return [];
+  }
+  const pops = new Set();
+  for (const item of collectSchedulesFromGrid()) {
+    if (item?.origem === "bloqueio" || item?.status === "bloqueado") {
+      continue;
+    }
+    const itemTechKey = normalizeTechnicianKey(getDisplayTechnicianName(item?.tecnico));
+    if (!itemTechKey || itemTechKey !== technicianKey) {
+      continue;
+    }
+    const pop = String(item?.rota || "").trim();
+    if (pop) {
+      pops.add(pop);
+    }
+  }
+  return Array.from(pops).sort((a, b) => a.localeCompare(b));
+}
+
+function applySelectedRoutes(values) {
+  if (!elements.routeFilter) {
+    return;
+  }
+  const selected = new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean));
+  for (const option of Array.from(elements.routeFilter.options || [])) {
+    option.selected = selected.has(String(option.value || "").trim());
+  }
 }
 
 function renderRouteFilter(options = [], selectedValues = []) {
@@ -1323,7 +1422,36 @@ function wireEvents() {
   elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
   elements.statusFilter.addEventListener("change", refreshDashboard);
   if (elements.routeFilter) {
-    elements.routeFilter.addEventListener("change", refreshDashboard);
+    elements.routeFilter.addEventListener("change", () => {
+      const selectedRoutes = getSelectedRoutes();
+      if (isTechnicianRouteModeEnabled() && selectedRoutes.length === 1) {
+        const selectedPop = selectedRoutes[0];
+        const technician = findTechnicianForPop(selectedPop);
+        const pops = technician ? findPopsForTechnician(technician) : [];
+        if (pops.length) {
+          applySelectedRoutes(pops);
+        }
+      }
+      refreshDashboard();
+    });
+  }
+  if (elements.routeModeTechnician) {
+    elements.routeModeTechnician.addEventListener("change", () => {
+      if (isTechnicianRouteModeEnabled()) {
+        const selectedRoutes = getSelectedRoutes();
+        if (selectedRoutes.length === 1) {
+          const technician = findTechnicianForPop(selectedRoutes[0]);
+          const pops = technician ? findPopsForTechnician(technician) : [];
+          if (pops.length) {
+            applySelectedRoutes(pops);
+          }
+        }
+      }
+      refreshDashboard();
+    });
+  }
+  if (elements.routeModePop) {
+    elements.routeModePop.addEventListener("change", refreshDashboard);
   }
   elements.startDateFilter.addEventListener("change", refreshDashboard);
   elements.endDateFilter.addEventListener("change", refreshDashboard);
