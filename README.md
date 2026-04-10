@@ -68,6 +68,7 @@ Observacao:
 - o projeto pode continuar usando `basic_auth` para leitura normal
 - para alterar data/horario de OS aberta no SGP, preencha tambem `app_token_auth.app` e `app_token_auth.token`
 - ao agendar com data+horario+tecnico, o backend pode forcar a prioridade da OS para alta usando `agendamento.prioridade_os_ao_agendar` (padrao `1`). Para desativar, defina `0`.
+- confirmacao automatica (SMS): so e solicitada quando a OS tiver **data de agendamento** e **tecnico** preenchidos. OS com data mas sem tecnico nao disparam confirmacao (e o botao “Enviar confirmacao” ignora esses itens).
 
 ## Como executar
 
@@ -141,6 +142,16 @@ Esse script:
 - valida se a branch local nao esta divergente
 - aplica apenas `fast-forward`
 - reinicia o servidor do dashboard
+
+### Release (versionamento semantico)
+
+O projeto segue versionamento semantico em `package.json` e oferece um helper inspirado no `dashboard_tecnico`:
+
+```bash
+./release_dashboard.sh patch
+./release_dashboard.sh minor --push
+./release_dashboard.sh major --message "Sua mensagem"
+```
 
 ### Instalar cron de 5 em 5 minutos
 

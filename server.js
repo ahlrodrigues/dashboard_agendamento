@@ -32,9 +32,8 @@ let confirmationResendJobRunning = false;
 
 const DASHBOARD_VERSION = (() => {
   try {
-    const pkg = readJson(PACKAGE_PATH, {});
-    const version = String(pkg?.version || "").trim();
-    return version || "dev";
+    const { getDashboardVersionLabel } = require("./version");
+    return getDashboardVersionLabel();
   } catch (error) {
     return "dev";
   }
