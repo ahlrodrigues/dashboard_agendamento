@@ -39,6 +39,13 @@ const DASHBOARD_VERSION = (() => {
   }
 })();
 
+function toLocalIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(MANUAL_SCHEDULES_PATH)) {
@@ -1372,7 +1379,7 @@ function normalizeSlot(value) {
 function plusDays(baseDate, days) {
   const date = new Date(`${baseDate}T12:00:00`);
   date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }
 
 function normalizeStatus(raw) {
@@ -1685,11 +1692,19 @@ function startOfWeek(dateText) {
   const day = date.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diff);
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }
 
 function endOfWeek(dateText) {
   return plusDays(startOfWeek(dateText), 6);
+}
+
+function buildWindowDays(startDateText) {
+  const base = isoDateOnly(startDateText);
+  if (!base) {
+    return buildWeekDays(toLocalIsoDate(new Date()));
+  }
+  return Array.from({ length: 7 }, (_, index) => plusDays(base, index));
 }
 
 function buildWeekDays(dateText) {
@@ -1706,8 +1721,8 @@ function formatDateLabel(dateText) {
   return formatter.format(new Date(`${dateText}T12:00:00`));
 }
 
-function buildGrid(schedules, selectedDate, slots) {
-  const days = buildWeekDays(selectedDate);
+function buildGrid(schedules, windowStartDate, slots) {
+  const days = buildWindowDays(windowStartDate);
   const dynamicSlots = new Set(slots);
   for (const item of schedules) {
     if (days.includes(item.data)) {
@@ -1904,7 +1919,7 @@ async function enrichSchedulesWithConfirmation(config, schedules) {
 
 async function getDashboardData(query) {
   const config = loadConfig();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalIsoDate(new Date());
   const selectedDate = isoDateOnly(query.get("data")) || today;
   const startDate = isoDateOnly(query.get("inicio")) || plusDays(selectedDate, -Number(config.dashboard.janela_dias_passado || 7));
   const endDate = isoDateOnly(query.get("fim")) || plusDays(selectedDate, Number(config.dashboard.janela_dias_futuro || 14));
@@ -1983,7 +1998,7 @@ async function getDashboardData(query) {
   const serializedSchedules = schedules.map(serializeSchedule);
   const filteredSerializedSchedules = filtered.map(serializeSchedule);
   const summary = summarizeSchedules(serializedSchedules);
-  const grid = buildGrid(serializedSchedules, selectedDate, slots);
+  const grid = buildGrid(serializedSchedules, startDate, slots);
   const availableRoutes = Array.from(new Set(serializedSchedules.map((item) => String(item.rota || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
   return {
@@ -1995,8 +2010,8 @@ async function getDashboardData(query) {
     period: {
       startDate,
       endDate,
-      weekStart: startOfWeek(selectedDate),
-      weekEnd: endOfWeek(selectedDate)
+      weekStart: startDate,
+      weekEnd: endDate
     },
     sourceMode,
     notices,

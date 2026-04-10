@@ -83,10 +83,23 @@ function formatDateTime(dateText) {
   }).format(new Date(dateText));
 }
 
+function toLocalIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function shiftDate(dateText, days) {
   const date = new Date(`${dateText}T12:00:00`);
   date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
+}
+
+function applySevenDayWindowFromStartDate(dateText) {
+  const base = dateText || toLocalIsoDate(new Date());
+  elements.startDateFilter.value = base;
+  elements.endDateFilter.value = shiftDate(base, 6);
 }
 
 function hhmm(value) {
@@ -746,7 +759,7 @@ function fillScheduleFormFromSchedule(item) {
 }
 
 function resetScheduleForm() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalIsoDate(new Date());
   elements.scheduleForm.reset();
   elements.scheduleForm.elements.id.value = "";
   elements.scheduleForm.elements.osId.value = "";
@@ -868,11 +881,11 @@ async function loadDashboard() {
   updateSelectionControls();
   updateSlotConflictFromForm();
 
-  if (!elements.startDateFilter.value || elements.startDateFilter.value !== data.period.startDate) {
-    elements.startDateFilter.value = data.period.startDate;
+  if (data.period?.weekStart && elements.startDateFilter.value !== data.period.weekStart) {
+    elements.startDateFilter.value = data.period.weekStart;
   }
-  if (!elements.endDateFilter.value || elements.endDateFilter.value !== data.period.endDate) {
-    elements.endDateFilter.value = data.period.endDate;
+  if (data.period?.weekEnd && elements.endDateFilter.value !== data.period.weekEnd) {
+    elements.endDateFilter.value = data.period.weekEnd;
   }
 }
 
@@ -1457,8 +1470,10 @@ function wireEvents() {
   if (elements.routeModePop) {
     elements.routeModePop.addEventListener("change", refreshDashboard);
   }
-  elements.startDateFilter.addEventListener("change", refreshDashboard);
-  elements.endDateFilter.addEventListener("change", refreshDashboard);
+  elements.startDateFilter.addEventListener("change", () => {
+    applySevenDayWindowFromStartDate(elements.startDateFilter.value);
+    refreshDashboard();
+  });
   elements.searchFilter.addEventListener("input", debounce(refreshDashboard, 250));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
   const debouncedConflictUpdate = debounce(updateSlotConflictFromForm, 120);
@@ -1522,8 +1537,8 @@ function navigateWeek(offsetDays) {
   if (!elements.startDateFilter.value || !elements.endDateFilter.value) {
     return;
   }
-  elements.startDateFilter.value = shiftDate(elements.startDateFilter.value, offsetDays);
-  elements.endDateFilter.value = shiftDate(elements.endDateFilter.value, offsetDays);
+  const nextReference = shiftDate(elements.startDateFilter.value, offsetDays);
+  applySevenDayWindowFromStartDate(nextReference);
   refreshDashboard();
 }
 
@@ -1536,11 +1551,8 @@ function debounce(fn, wait) {
 }
 
 function init() {
-  const today = new Date().toISOString().slice(0, 10);
-  const end = new Date(`${today}T12:00:00`);
-  end.setDate(end.getDate() + 14);
-  elements.startDateFilter.value = today;
-  elements.endDateFilter.value = end.toISOString().slice(0, 10);
+  const today = toLocalIsoDate(new Date());
+  applySevenDayWindowFromStartDate(today);
   if (elements.blockSlotForm?.elements?.data) {
     elements.blockSlotForm.elements.data.value = today;
   }
