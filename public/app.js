@@ -602,9 +602,7 @@ function canRequestConfirmation(item) {
   if (item.origem !== "sgp" || !String(item.osId || "").trim()) {
     return false;
   }
-  if (!item.data || !item.horario || item.horario === "A definir") {
-    return false;
-  }
+  if (!item.data) return false;
   return Boolean(getDisplayTechnicianName(item.tecnico));
 }
 
@@ -960,7 +958,7 @@ async function handleCalendarGridClick(event) {
       return;
     }
     if (!canRequestConfirmation(item)) {
-      showToast("Confirmacao so pode ser enviada quando data/horario e tecnico estiverem preenchidos.");
+      showToast("Confirmacao so pode ser enviada quando data de agendamento e tecnico estiverem preenchidos.");
       return;
     }
 

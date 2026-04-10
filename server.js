@@ -718,6 +718,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
   const html = form.html;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const shouldRequestConfirmation = canRequestCustomerConfirmation(entry);
+  const hasDefinedScheduleTime = Boolean(entry?.data && entry?.horario && entry.horario !== "A definir");
+  const existingScheduleValue = extractHtmlFieldValue(html, "data_agendamento");
   const smsClientValues = shouldRequestConfirmation ? pickSmsClientValues(html, entry.telefone) : [];
   const gatewayValue = shouldRequestConfirmation
     ? pickGatewayValue(
@@ -732,7 +734,9 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
     prioridade: forcedPriority != null ? String(forcedPriority) : (extractHtmlFieldValue(html, "prioridade") || "2"),
-    data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+    data_agendamento: hasDefinedScheduleTime
+      ? toBrazilDateTime(entry.data, entry.horario)
+      : existingScheduleValue,
     data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
     data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
     responsavel: hasMeaningfulTechnician(entry.tecnico)
@@ -2050,7 +2054,7 @@ function resolvePriorityForScheduledOs(config, entry) {
 }
 
 function canRequestCustomerConfirmation(entry) {
-  if (!entry?.data || !entry?.horario || entry.horario === "A definir") {
+  if (!entry?.data) {
     return false;
   }
   return hasMeaningfulTechnician(entry.tecnico);
@@ -2906,7 +2910,7 @@ async function requestConfirmationDispatch(payload) {
     if (!canRequestCustomerConfirmation(item)) {
       skipped.push({
         id: item.id || item.osId || "",
-        reason: "Confirmacao so pode ser enviada quando data/horario de agendamento e tecnico estiverem preenchidos."
+        reason: "Confirmacao so pode ser enviada quando data de agendamento e tecnico estiverem preenchidos."
       });
       continue;
     }
