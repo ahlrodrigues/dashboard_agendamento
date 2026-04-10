@@ -733,7 +733,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
       : extractHtmlFieldValue(html, "responsavel"),
     conteudo: extractHtmlFieldValue(html, "conteudo"),
     servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-    observacao: entry.observacao || extractHtmlFieldValue(html, "observacao"),
+    // Observação interna (SGP)
+    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
     anotacao: extractHtmlFieldValue(html, "anotacao"),
     anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
     status: extractHtmlFieldValue(html, "status") || "0",
@@ -1578,7 +1579,7 @@ function normalizeManualSchedule(entry) {
     confirmationSent: Boolean(entry.confirmationSent),
     confirmationRequestedAt: entry.confirmationRequestedAt || "",
     endereco: entry.endereco || "",
-    observacao: entry.observacao || "",
+    observacao: entry.justificativa || entry.observacao || "",
     origem: "pre_agendamento_local",
     raw: entry
   };
@@ -2013,11 +2014,12 @@ function currentDateTimeForSgp() {
 }
 
 function buildCreateCallPayload(config, entry) {
-  const content = entry.observacao || `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
+  const content = `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
   const payload = {
     contrato: entry.contrato,
     conteudo: content,
-    observacao: entry.observacao || "",
+    // Observação interna (SGP)
+    observacao: entry.justificativa || entry.observacao || "",
     ocorrenciatipo: Number(config.agendamento?.ocorrencia_tipo_padrao || 5),
     motivoos: Number(config.agendamento?.motivo_os_padrao || 1),
     setor: Number(config.agendamento?.setor_padrao || 1),
@@ -2342,7 +2344,7 @@ async function createSchedule(payload) {
     data: isoDateOnly(payload.data),
     horario: hhmm(payload.horario),
     endereco: String(payload.endereco || "").trim(),
-    observacao: String(payload.observacao || "").trim()
+    justificativa: String(payload.justificativa || payload.observacao || "").trim()
   };
 
   if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
@@ -2471,7 +2473,7 @@ async function updateSchedule(payload) {
     data: isoDateOnly(payload.data),
     horario: hhmm(payload.horario),
     endereco: String(payload.endereco || "").trim(),
-    observacao: String(payload.observacao || "").trim()
+    justificativa: String(payload.justificativa || payload.observacao || "").trim()
   };
 
   if (!id) {
@@ -2557,12 +2559,13 @@ async function updateSchedule(payload) {
       };
     }
 
-    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
-    const sgpPayload = {
-      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
-      observacao: entry.observacao || "",
-      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
-    };
+	    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
+	    const sgpPayload = {
+	      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+	      // Observação interna (SGP)
+	      observacao: entry.justificativa || entry.observacao || "",
+	      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
+	    };
 
     logSgpScheduleUpdate("request", { osId, endpoint, payload: sgpPayload });
 
