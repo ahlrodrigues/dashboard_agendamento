@@ -717,11 +717,14 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
-  const smsClientValues = pickSmsClientValues(html, entry.telefone);
-  const gatewayValue = pickGatewayValue(
-    html,
-    String(config.agendamento?.gateway_sms_agendamento_label || "AGENDAMENTO").trim() || "AGENDAMENTO"
-  );
+  const shouldRequestConfirmation = canRequestCustomerConfirmation(entry);
+  const smsClientValues = shouldRequestConfirmation ? pickSmsClientValues(html, entry.telefone) : [];
+  const gatewayValue = shouldRequestConfirmation
+    ? pickGatewayValue(
+        html,
+        String(config.agendamento?.gateway_sms_agendamento_label || "AGENDAMENTO").trim() || "AGENDAMENTO"
+      )
+    : "";
   const payload = {
     csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
     dpb_token: extractHtmlFieldValue(html, "dpb_token"),
@@ -746,7 +749,9 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
     veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
     sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
     data_checkin: extractHtmlFieldValue(html, "data_checkin"),
-    gateway_sms: gatewayValue || extractHtmlFieldValue(html, "gateway_sms")
+    ...(shouldRequestConfirmation && (gatewayValue || extractHtmlFieldValue(html, "gateway_sms"))
+      ? { gateway_sms: gatewayValue || extractHtmlFieldValue(html, "gateway_sms") }
+      : {})
   };
   if (htmlFieldChecked(html, "sms_tecnico")) {
     payload.sms_tecnico = "on";
@@ -754,7 +759,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
   if (htmlFieldChecked(html, "encerra_ocorrencia")) {
     payload.encerra_ocorrencia = "on";
   }
-  if (smsClientValues.length) {
+  if (shouldRequestConfirmation && smsClientValues.length) {
     payload.sms_cliente = smsClientValues;
   }
 
@@ -866,6 +871,14 @@ async function queueConfirmationDispatch(config, item) {
       if (mutationError) {
         throw new Error(mutationError);
       }
+      if (!response?.confirmationDispatchRequested) {
+        writeConfirmationDispatchEntry(osId, {
+          state: "manual",
+          manualAt: new Date().toISOString(),
+          errorMessage: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
+        });
+        return;
+      }
       writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId).catch(() => ({
         confirmationUrl: "",
         confirmationStatus: "aguardando_confirmacao",
@@ -963,6 +976,11 @@ async function processPendingConfirmationResends() {
         serviceOrder?.hora ||
         ""
       );
+      const technician = String(serviceOrder?.responsavel || "").trim();
+
+      if (!canRequestCustomerConfirmation({ data: scheduleDate, horario: scheduleTime, tecnico: technician })) {
+        continue;
+      }
 
       await queueConfirmationDispatch(config, {
         osId,
@@ -971,7 +989,7 @@ async function processPendingConfirmationResends() {
         telefone: String(currentEntry.telefone || "").trim(),
         protocolo: String(serviceOrder?.ocorrencia || serviceOrder?.protocolo || "").trim(),
         rota: String(serviceOrder?.pop || "").trim(),
-        tecnico: String(serviceOrder?.responsavel || "").trim(),
+        tecnico: technician,
         data: scheduleDate,
         horario: scheduleTime,
         endereco: "",
@@ -2031,6 +2049,13 @@ function resolvePriorityForScheduledOs(config, entry) {
   return desired;
 }
 
+function canRequestCustomerConfirmation(entry) {
+  if (!entry?.data || !entry?.horario || entry.horario === "A definir") {
+    return false;
+  }
+  return hasMeaningfulTechnician(entry.tecnico);
+}
+
 function buildCreateCallPayload(config, entry) {
   const content = `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
@@ -2407,6 +2432,7 @@ async function createSchedule(payload) {
         confirmationRequestedAt: "",
         confirmationSent: false
       };
+      let autoQueued = false;
 
       if (createdOsId) {
         try {
@@ -2420,6 +2446,29 @@ async function createSchedule(payload) {
             confirmationSent: false
           };
         }
+
+        if (
+          canRequestCustomerConfirmation(entry) &&
+          String(config.basic_auth?.username || "").trim() &&
+          String(config.basic_auth?.password || "").trim()
+        ) {
+          try {
+            await queueConfirmationDispatch(config, {
+              id: createdOsId,
+              osId: createdOsId,
+              origem: "sgp",
+              ...entry
+            });
+            autoQueued = true;
+            confirmationDetails.confirmationUrl = "";
+            confirmationDetails.confirmationStatus = "na_fila_envio";
+            confirmationDetails.confirmationTitle = "";
+            confirmationDetails.confirmationRequestedAt = "";
+            confirmationDetails.confirmationSent = false;
+          } catch (error) {
+            autoQueued = false;
+          }
+        }
       }
 
       return {
@@ -2429,6 +2478,7 @@ async function createSchedule(payload) {
           mode: "sgp",
           message: "Ocorrencia e agendamento enviados ao SGP com sucesso.",
           response: created,
+          autoConfirmationQueued: autoQueued,
           confirmationUrl: confirmationDetails.confirmationUrl,
           confirmationStatus: confirmationDetails.confirmationStatus,
           confirmationTitle: confirmationDetails.confirmationTitle,
@@ -2850,6 +2900,13 @@ async function requestConfirmationDispatch(payload) {
       skipped.push({
         id: item.id || item.osId || "",
         reason: "Apenas OS vindas do SGP podem receber confirmacao em lote."
+      });
+      continue;
+    }
+    if (!canRequestCustomerConfirmation(item)) {
+      skipped.push({
+        id: item.id || item.osId || "",
+        reason: "Confirmacao so pode ser enviada quando data/horario de agendamento e tecnico estiverem preenchidos."
       });
       continue;
     }

@@ -599,7 +599,13 @@ function confirmationStatusLabel(status, sent = false) {
 }
 
 function canRequestConfirmation(item) {
-  return item.origem === "sgp" && String(item.osId || "").trim();
+  if (item.origem !== "sgp" || !String(item.osId || "").trim()) {
+    return false;
+  }
+  if (!item.data || !item.horario || item.horario === "A definir") {
+    return false;
+  }
+  return Boolean(getDisplayTechnicianName(item.tecnico));
 }
 
 function updateSelectionControls() {
@@ -954,7 +960,7 @@ async function handleCalendarGridClick(event) {
       return;
     }
     if (!canRequestConfirmation(item)) {
-      showToast("Essa OS nao pode receber solicitacao de confirmacao.");
+      showToast("Confirmacao so pode ser enviada quando data/horario e tecnico estiverem preenchidos.");
       return;
     }
 
