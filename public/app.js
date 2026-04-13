@@ -10,7 +10,8 @@ const state = {
   slotConflictActive: false,
   user: null,
   isAdmin: false,
-  compactView: true
+  compactView: true,
+  darkMode: false
 };
 
 const summaryConfig = [
@@ -77,7 +78,8 @@ const elements = {
   loginError: document.querySelector("#loginError"),
   logoutButton: document.querySelector("#logoutButton"),
   userBadge: document.querySelector("#userBadge"),
-  toggleCompactView: document.querySelector("#toggleCompactView")
+  toggleCompactView: document.querySelector("#toggleCompactView"),
+  toggleDarkMode: document.querySelector("#toggleDarkMode")
 };
 
 function getAuthToken() {
@@ -1828,6 +1830,20 @@ function initMainApp() {
     elements.toggleCompactView.addEventListener("click", () => {
       state.compactView = !state.compactView;
       updateCompactView();
+    });
+  }
+
+  state.darkMode = localStorage.getItem("darkMode") === "true";
+  if (state.darkMode) {
+    document.body.classList.add("dark");
+    if (elements.toggleDarkMode) elements.toggleDarkMode.classList.add("is-active");
+  }
+  if (elements.toggleDarkMode) {
+    elements.toggleDarkMode.addEventListener("click", () => {
+      state.darkMode = !state.darkMode;
+      document.body.classList.toggle("dark", state.darkMode);
+      elements.toggleDarkMode.classList.toggle("is-active", state.darkMode);
+      localStorage.setItem("darkMode", state.darkMode);
     });
   }
 

@@ -16,6 +16,17 @@
   --radius-md: 14px;
 }
 
+body.dark {
+  --bg: #0f172a;
+  --bg-accent: #1e293b;
+  --panel: rgba(30, 41, 59, 0.9);
+  --panel-strong: #1e293b;
+  --line: rgba(148, 163, 184, 0.12);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -29,6 +40,22 @@ body {
     radial-gradient(circle at bottom right, rgba(122, 194, 255, 0.35), transparent 35%),
     linear-gradient(135deg, var(--bg) 0%, var(--bg-accent) 100%);
   min-height: 100vh;
+}
+
+body.dark {
+  background:
+    radial-gradient(circle at top left, rgba(30, 41, 59, 0.95), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(51, 65, 85, 0.35), transparent 35%),
+    linear-gradient(135deg, var(--bg) 0%, var(--bg-accent) 100%);
+}
+
+body.dark .login-card,
+body.dark .panel,
+body.dark .calendar-head,
+body.dark .calendar-cell,
+body.dark .summary-card,
+body.dark .modal-content {
+  background: var(--panel-strong);
 }
 
 .login-screen {
