@@ -158,15 +158,15 @@ body {
 }
 
 .admin-only {
-  display: none;
+  display: none !important;
 }
 
 body.is-admin .admin-only {
-  display: block;
+  display: block !important;
 }
 
 body.is-admin .calendar-bulk-actions.admin-only {
-  display: flex;
+  display: flex !important;
 }
 
 .brand-card {
