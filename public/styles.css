@@ -469,6 +469,11 @@ select[multiple] {
   flex-direction: row;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hero-meta + .hero-meta {
+  margin-top: 8px;
 }
 
 .snapshot {
