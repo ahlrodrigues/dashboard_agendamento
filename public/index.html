@@ -8,8 +8,8 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Agenda SGP Call Center</title>
-  <link rel="stylesheet" href="/styles.css?v=11" />
-  <script src="/app.js?v=11" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=12" />
+  <script src="/app.js?v=12" defer></script>
 </head>
 
 <body>
@@ -239,10 +239,16 @@
 
       <section id="noticeArea" class="notice-area"></section>
 
-      <span class="toggle-label admin-only" style="display: none;">Ocultar celulas</span>
-      <span id="toggleCompactView" class="toggle-switch admin-only" title="Alternar visualizacao" style="display: none;"></span>
-      <span class="toggle-label">Tema</span>
-      <span id="toggleDarkMode" class="toggle-switch" title="Alternar tema escuro"></span>
+      <div class="toolbar-row">
+        <div class="toolbar-left">
+          <span class="toggle-label admin-only" style="display: none;">Ocultar celulas</span>
+          <span id="toggleCompactView" class="toggle-switch admin-only" title="Alternar visualizacao" style="display: none;"></span>
+        </div>
+        <div class="toolbar-right">
+          <span class="toggle-label">Tema</span>
+          <span id="toggleDarkMode" class="toggle-switch" title="Alternar tema escuro"></span>
+        </div>
+      </div>
       <section id="summaryCards" class="summary-grid"></section>
 
       <section class="calendar-panel">

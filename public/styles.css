@@ -189,7 +189,7 @@ body.dark .modal-content {
 }
 
 body.is-admin .admin-only {
-  display: block !important;
+  display: inline-block !important;
 }
 
 body.is-admin .calendar-bulk-actions.admin-only {
@@ -450,6 +450,20 @@ select[multiple] {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 14px;
+}
+
+.toolbar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 #noticeArea + .toggle-switch,
