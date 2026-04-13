@@ -425,6 +425,58 @@ select[multiple] {
   gap: 14px;
 }
 
+#noticeArea + .toggle-switch,
+#noticeArea ~ .toggle-label {
+  display: inline-flex;
+  vertical-align: top;
+}
+
+#noticeArea ~ .toggle-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-right: 8px;
+}
+
+#noticeArea ~ .toggle-switch {
+  margin-right: 14px;
+}
+
+.toggle-switch {
+  width: 48px;
+  height: 26px;
+  background-color: #cbd5e1;
+  border-radius: 13px;
+  cursor: pointer;
+  display: inline-block;
+  position: relative;
+  transition: background-color 0.2s;
+}
+
+.toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.toggle-switch:hover {
+  background-color: #94a3b8;
+}
+
+.toggle-switch.is-active {
+  background-color: #3b82f6;
+}
+
+.toggle-switch.is-active::after {
+  transform: translateX(22px);
+}
+
 .summary-card {
   border-radius: var(--radius-lg);
   padding: 18px;
@@ -958,6 +1010,47 @@ tbody tr:hover {
 @keyframes slideIn {
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
+}
+
+.switch-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 46px;
+  height: 26px;
+  cursor: pointer;
+}
+
+.switch-label input {
+  display: none;
+}
+
+.switch-track {
+  position: absolute;
+  width: 46px;
+  height: 26px;
+  background-color: #cbd5e1;
+  border-radius: 13px;
+  transition: background-color 0.2s;
+}
+
+.switch-label input:checked + .switch-track {
+  background-color: #3b82f6;
+}
+
+.switch-thumb {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  background-color: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  margin: 2px;
+  transition: transform 0.2s;
+}
+
+.switch-label input:checked ~ .switch-thumb {
+  transform: translateX(20px);
 }
 
 @media (max-width: 1180px) {

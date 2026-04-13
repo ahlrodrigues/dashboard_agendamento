@@ -9,7 +9,8 @@ const state = {
   refreshing: false,
   slotConflictActive: false,
   user: null,
-  isAdmin: false
+  isAdmin: false,
+  compactView: true
 };
 
 const summaryConfig = [
@@ -75,7 +76,8 @@ const elements = {
   loginButton: document.querySelector("#loginButton"),
   loginError: document.querySelector("#loginError"),
   logoutButton: document.querySelector("#logoutButton"),
-  userBadge: document.querySelector("#userBadge")
+  userBadge: document.querySelector("#userBadge"),
+  toggleCompactView: document.querySelector("#toggleCompactView")
 };
 
 function getAuthToken() {
@@ -1038,6 +1040,9 @@ async function loadDashboard() {
   renderTable(data.schedules);
   updateMeta(data);
   updateSelectionControls();
+  if (state.isAdmin && state.compactView) {
+    updateCompactView();
+  }
   updateSlotConflictFromForm();
 
   if (data.period?.weekStart && elements.startDateFilter.value !== data.period.weekStart) {
@@ -1760,6 +1765,11 @@ function updateAdminUiVisibility() {
       elements.userBadge.className = "badge success";
       elements.userBadge.style.display = "inline-block";
     }
+    if (elements.toggleCompactView) {
+      elements.toggleCompactView.style.display = "inline-block";
+    }
+    state.compactView = true;
+    updateCompactView();
   } else {
     document.body.classList.remove("is-admin");
     if (elements.userBadge) {
@@ -1767,6 +1777,36 @@ function updateAdminUiVisibility() {
       elements.userBadge.className = "badge neutral";
       elements.userBadge.style.display = "inline-block";
     }
+    if (elements.toggleCompactView) {
+      elements.toggleCompactView.style.display = "none";
+    }
+  }
+}
+
+function updateCompactView() {
+  const summaryCards = document.querySelector("#summaryCards");
+  const toggle = elements.toggleCompactView;
+
+  if (state.compactView) {
+    if (summaryCards) {
+      summaryCards.style.display = "grid";
+      const cards = summaryCards.querySelectorAll(".summary-card");
+      cards.forEach((card) => {
+        const text = card.querySelector("span")?.textContent || "";
+        const key = Object.entries({ agendado: "Agendamentos", itinerario: "Itinerario", pre_agendado: "Pre-agendadas" }).find(([, v]) => text.includes(v))?.[0];
+        card.style.display = (key === "agendado" || key === "itinerario" || key === "pre_agendado") ? "" : "none";
+      });
+    }
+    if (toggle) toggle.classList.add("is-active");
+  } else {
+    if (summaryCards) {
+      summaryCards.style.display = "";
+      const cards = summaryCards.querySelectorAll(".summary-card");
+      cards.forEach((card) => {
+        card.style.display = "";
+      });
+    }
+    if (toggle) toggle.classList.remove("is-active");
   }
 }
 
@@ -1783,7 +1823,14 @@ function initMainApp() {
   setBlockSlotStatus("");
   resetScheduleForm();
   wireEvents();
-  
+
+  if (elements.toggleCompactView) {
+    elements.toggleCompactView.addEventListener("click", () => {
+      state.compactView = !state.compactView;
+      updateCompactView();
+    });
+  }
+
   if (elements.logoutButton) {
     elements.logoutButton.addEventListener("click", async () => {
       await logout();
