@@ -457,6 +457,10 @@ select[multiple] {
     linear-gradient(120deg, rgba(255, 255, 255, 0.92), rgba(228, 240, 255, 0.82)),
     linear-gradient(135deg, rgba(28, 116, 217, 0.06), rgba(46, 175, 97, 0.08));
   position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-content: flex-start;
 }
 
 .hero h2 {
