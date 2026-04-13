@@ -33,6 +33,14 @@ body.dark * {
   color: #ffffff !important;
 }
 
+body.dark .summary-card,
+body.dark .calendar-cell,
+body.dark .calendar-head,
+body.dark .panel,
+body.dark .modal-content {
+  color: #16325c !important;
+}
+
 body.dark h1,
 body.dark h2,
 body.dark h3,
@@ -71,6 +79,7 @@ body.dark .calendar-cell,
 body.dark .summary-card,
 body.dark .modal-content {
   background: var(--panel-strong);
+  color: #16325c !important;
 }
 
 .login-screen {
@@ -465,17 +474,6 @@ select[multiple] {
 .snapshot {
   font-size: 0.8rem;
   color: var(--muted);
-  margin-top: 4px;
-}
-
-.hero-meta + .snapshot {
-  margin-top: 20px;
-}
-
-.hero > .snapshot {
-  position: absolute;
-  right: 0;
-  bottom: -24px;
 }
 
 .summary-grid {
