@@ -146,6 +146,47 @@ function deleteBlockedSlot(id) {
   return true;
 }
 
+function createSimpleJwt(payload, secret) {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = simpleHmac(`${header}.${body}`, secret);
+  return `${header}.${body}.${signature}`;
+}
+
+function simpleHmac(data, secret) {
+  const crypto = require("crypto");
+  return crypto.createHmac("sha256", secret).update(data).digest("base64url");
+}
+
+function verifySimpleJwt(token, secret) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+      return null;
+    }
+    const [header, body, signature] = parts;
+    const expectedSig = simpleHmac(`${header}.${body}`, secret);
+    if (signature !== expectedSig) {
+      return null;
+    }
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (payload.exp && Date.now() > payload.exp) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function extractBearerToken(req) {
+  const authHeader = req.headers.authorization || "";
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+  return null;
+}
+
 function loadConfig() {
   const configPath = fs.existsSync(CONFIG_LOCAL_PATH) ? CONFIG_LOCAL_PATH : CONFIG_PATH;
   const config = readJson(configPath, {});
@@ -168,14 +209,46 @@ function loadConfig() {
       motivo_os_padrao: 1,
       setor_padrao: 1,
       prioridade_os_padrao: 2,
-      // Valor numérico conforme o cadastro do SGP (ex.: 1 = Alta em muitos ambientes).
-      // Se 0/undefined, mantém a prioridade atual/padrão.
-      prioridade_os_ao_agendar: 1,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
       ...(config.agendamento || {})
+    },
+    auth: {
+      jwt_secret: "dashboard-secret-change-in-production",
+      admin_group: "agendamento",
+      ...(config.auth || {})
     }
   };
+}
+
+async function fetchSgpUserInfo(config, username, password) {
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  const authToken = Buffer.from(`${username}:${password}`).toString("base64");
+  
+  const response = await fetch(`${baseUrl}/api/auth/info/`, {
+    headers: {
+      Authorization: `Basic ${authToken}`,
+      "Content-Type": "application/json"
+    },
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Credenciais invalidas");
+    }
+    throw new Error(`Erro ao autenticar no SGP: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function userHasAdminGroup(userInfo, config) {
+  const adminGroup = String(config.auth?.admin_group || "agendamento").toLowerCase();
+  const grupos = userInfo?.grupos || [];
+  return grupos.some(g => 
+    String(g.descricao || "").toLowerCase() === adminGroup
+  );
 }
 
 function buildAuthHeaders(config) {
@@ -1917,7 +1990,7 @@ async function enrichSchedulesWithConfirmation(config, schedules) {
   return schedules;
 }
 
-async function getDashboardData(query) {
+async function getDashboardData(query, authUser = null) {
   const config = loadConfig();
   const today = toLocalIsoDate(new Date());
   const selectedDate = isoDateOnly(query.get("data")) || today;
@@ -2027,7 +2100,8 @@ async function getDashboardData(query) {
     },
     availableRoutes,
     grid,
-    schedules: filteredSerializedSchedules
+    schedules: filteredSerializedSchedules,
+    isAdmin: Boolean(authUser?.isAdmin)
   };
 }
 
@@ -3014,14 +3088,106 @@ const server = http.createServer(async (req, res) => {
     ensureDataDir();
     const parsedUrl = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
     const normalizedPathname = parsedUrl.pathname.replace(/\/+$/, "") || "/";
+    const config = loadConfig();
 
     if (req.method === "GET" && parsedUrl.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, service: "dashboard-agendamento-sgp", version: DASHBOARD_VERSION });
       return;
     }
 
+    if (req.method === "POST" && parsedUrl.pathname === "/api/auth/login") {
+      try {
+        const body = await collectRequestBody(req);
+        const { username, password } = body || {};
+        
+        if (!username || !password) {
+          sendJson(res, 400, { ok: false, message: "Usuario e senha sao obrigatorios." });
+          return;
+        }
+
+        const userInfo = await fetchSgpUserInfo(config, username, password);
+        const isAdmin = userHasAdminGroup(userInfo, config);
+        
+        const tokenPayload = {
+          sub: userInfo.usuario,
+          nome: userInfo.nome,
+          email: userInfo.email,
+          grupos: userInfo.grupos || [],
+          isAdmin,
+          iat: Date.now(),
+          exp: Date.now() + (8 * 60 * 60 * 1000)
+        };
+        
+        const token = createSimpleJwt(tokenPayload, config.auth.jwt_secret);
+        
+        sendJson(res, 200, {
+          ok: true,
+          token,
+          user: {
+            username: userInfo.usuario,
+            nome: userInfo.nome,
+            email: userInfo.email,
+            isAdmin
+          }
+        });
+      } catch (error) {
+        sendJson(res, 401, { ok: false, message: error.message || "Falha na autenticacao." });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && parsedUrl.pathname === "/api/auth/logout") {
+      sendJson(res, 200, { ok: true, message: "Logout realizado." });
+      return;
+    }
+
+    if (req.method === "GET" && parsedUrl.pathname === "/api/auth/me") {
+      const token = extractBearerToken(req);
+      if (!token) {
+        sendJson(res, 401, { ok: false, message: "Token nao fornecido." });
+        return;
+      }
+
+      const payload = verifySimpleJwt(token, config.auth.jwt_secret);
+      if (!payload) {
+        sendJson(res, 401, { ok: false, message: "Token invalido ou expirado." });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        user: {
+          username: payload.sub,
+          nome: payload.nome,
+          email: payload.email,
+          isAdmin: payload.isAdmin
+        }
+      });
+      return;
+    }
+
+    const isProtectedRoute = normalizedPathname.startsWith("/api/") && 
+      !normalizedPathname.startsWith("/api/auth/") &&
+      normalizedPathname !== "/api/health";
+    
+    if (isProtectedRoute) {
+      const token = extractBearerToken(req);
+      if (!token) {
+        sendJson(res, 401, { ok: false, message: "Autenticacao necessaria." });
+        return;
+      }
+
+      const payload = verifySimpleJwt(token, config.auth.jwt_secret);
+      if (!payload) {
+        sendJson(res, 401, { ok: false, message: "Token invalido ou expirado." });
+        return;
+      }
+
+      req.authUser = payload;
+    }
+
     if (req.method === "GET" && parsedUrl.pathname === "/api/dashboard-data") {
-      const data = await getDashboardData(parsedUrl.searchParams);
+      const data = await getDashboardData(parsedUrl.searchParams, req.authUser);
       sendJson(res, 200, data);
       return;
     }
@@ -3033,6 +3199,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
       const result = await createSchedule(payload);
       sendJson(res, result.statusCode, result.body);
@@ -3040,6 +3210,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/edit") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
       const result = await updateSchedule(payload);
       sendJson(res, result.statusCode, result.body);
@@ -3047,6 +3221,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/delete") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
       const result = await deleteSchedule(payload);
       sendJson(res, result.statusCode, result.body);
@@ -3054,6 +3232,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/bloqueios") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
       const result = await createBlockedSlot(payload);
       sendJson(res, result.statusCode, result.body);
@@ -3061,6 +3243,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/bloqueios/delete") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
       const result = await removeBlockedSlot(payload);
       sendJson(res, result.statusCode, result.body);

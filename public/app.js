@@ -7,22 +7,24 @@ const state = {
   autoRefreshTimer: null,
   autoRefreshMs: 300000,
   refreshing: false,
-  slotConflictActive: false
+  slotConflictActive: false,
+  user: null,
+  isAdmin: false
 };
 
 const summaryConfig = [
   { key: "agendado", label: "Agendamentos", className: "blue" },
   { key: "itinerario", label: "Itinerario", className: "indigo" },
   { key: "pre_agendado", label: "Pre-agendadas", className: "amber" },
-  { key: "sem_solicitacao", label: "Sem solicitacao", className: "slate" },
-  { key: "na_fila_envio", label: "Na fila", className: "gold" },
-  { key: "processando_envio", label: "Enviando", className: "sky" },
-  { key: "aguardando_confirmacao", label: "Aguardando", className: "pink" },
-  { key: "reenvio_1", label: "1o reenvio", className: "violet" },
-  { key: "reenvio_2", label: "2o reenvio", className: "violet" },
-  { key: "envio_manual", label: "Envio manual", className: "orange" },
-  { key: "rejeitado", label: "Negativas", className: "red" },
-  { key: "erro_envio", label: "Erros envio", className: "orange-deep" }
+  { key: "sem_solicitacao", label: "Sem solicitacao", className: "slate", adminOnly: true },
+  { key: "na_fila_envio", label: "Na fila", className: "gold", adminOnly: true },
+  { key: "processando_envio", label: "Enviando", className: "sky", adminOnly: true },
+  { key: "aguardando_confirmacao", label: "Aguardando", className: "pink", adminOnly: true },
+  { key: "reenvio_1", label: "1o reenvio", className: "violet", adminOnly: true },
+  { key: "reenvio_2", label: "2o reenvio", className: "violet", adminOnly: true },
+  { key: "envio_manual", label: "Envio manual", className: "orange", adminOnly: true },
+  { key: "rejeitado", label: "Negativas", className: "red", adminOnly: true },
+  { key: "erro_envio", label: "Erros envio", className: "orange-deep", adminOnly: true }
 ];
 
 const elements = {
@@ -64,8 +66,161 @@ const elements = {
   tabContents: document.querySelectorAll(".tab-content"),
   editScheduleForm: document.querySelector("#editScheduleForm"),
   cancelScheduleForm: document.querySelector("#cancelScheduleForm"),
-  osLookupList: document.querySelector("#osLookupList")
+  osLookupList: document.querySelector("#osLookupList"),
+  loginScreen: document.querySelector("#loginScreen"),
+  mainApp: document.querySelector("#mainApp"),
+  loginForm: document.querySelector("#loginForm"),
+  loginUsername: document.querySelector("#loginUsername"),
+  loginPassword: document.querySelector("#loginPassword"),
+  loginButton: document.querySelector("#loginButton"),
+  loginError: document.querySelector("#loginError"),
+  logoutButton: document.querySelector("#logoutButton")
 };
+
+function getAuthToken() {
+  return localStorage.getItem("dashboard_token");
+}
+
+function setAuthToken(token) {
+  localStorage.setItem("dashboard_token", token);
+}
+
+function clearAuthToken() {
+  localStorage.removeItem("dashboard_token");
+  localStorage.removeItem("dashboard_user");
+}
+
+function getStoredUser() {
+  const data = localStorage.getItem("dashboard_user");
+  return data ? JSON.parse(data) : null;
+}
+
+function setStoredUser(user) {
+  localStorage.setItem("dashboard_user", JSON.stringify(user));
+}
+
+function clearStoredUser() {
+  localStorage.removeItem("dashboard_user");
+}
+
+async function checkAuth() {
+  const token = getAuthToken();
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const response = await fetch("/api/auth/me", {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      clearAuthToken();
+      clearStoredUser();
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.ok && data.user) {
+      state.user = data.user;
+      state.isAdmin = data.user.isAdmin;
+      setStoredUser(data.user);
+      return data.user;
+    }
+
+    clearAuthToken();
+    clearStoredUser();
+    return null;
+  } catch (error) {
+    clearAuthToken();
+    clearStoredUser();
+    return null;
+  }
+}
+
+async function login(username, password) {
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Falha na autenticacao.");
+    }
+
+    setAuthToken(data.token);
+    setStoredUser(data.user);
+    state.user = data.user;
+    state.isAdmin = data.user.isAdmin;
+
+    return data.user;
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getAuthToken()}`
+      }
+    });
+  } catch (error) {
+  }
+
+  clearAuthToken();
+  clearStoredUser();
+  state.user = null;
+  state.isAdmin = false;
+}
+
+async function apiFetch(url, options = {}) {
+  const token = getAuthToken();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers
+  };
+
+  const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    clearAuthToken();
+    clearStoredUser();
+    showLoginScreen();
+    throw new Error("Sessao expirada. Faca login novamente.");
+  }
+
+  return response;
+}
+
+function showLoginScreen() {
+  if (elements.loginScreen) {
+    elements.loginScreen.style.display = "flex";
+  }
+  if (elements.mainApp) {
+    elements.mainApp.style.display = "none";
+  }
+}
+
+function showMainApp() {
+  if (elements.loginScreen) {
+    elements.loginScreen.style.display = "none";
+  }
+  if (elements.mainApp) {
+    elements.mainApp.style.display = "grid";
+  }
+}
 
 function formatDate(dateText) {
   if (!dateText) {
@@ -278,7 +433,8 @@ function sourceLabel(sourceMode) {
 }
 
 function renderSummary(summary) {
-  elements.summaryCards.innerHTML = summaryConfig
+  const filteredConfig = summaryConfig.filter(item => !item.adminOnly || state.isAdmin);
+  elements.summaryCards.innerHTML = filteredConfig
     .map(
       (item) => `
         <article class="summary-card ${item.className}">
@@ -859,13 +1015,15 @@ async function loadDashboard() {
     params.set("busca", elements.searchFilter.value.trim());
   }
 
-  const response = await fetch(`/api/dashboard-data?${params.toString()}`);
+  const response = await apiFetch(`/api/dashboard-data?${params.toString()}`);
   const data = await response.json();
   if (!response.ok || !data.ok) {
     throw new Error(data.message || "Nao foi possivel atualizar o dashboard.");
   }
   state.data = data;
+  state.isAdmin = data.isAdmin || false;
   state.autoRefreshMs = Math.max(30000, Number(data.autoRefreshSeconds || 300) * 1000);
+  updateAdminUiVisibility();
   renderRouteFilter(data.availableRoutes || [], data.filters?.pops || selectedRoutes);
   renderBlockPopSelect(data.availableRoutes || []);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
@@ -946,9 +1104,8 @@ async function handleCalendarGridClick(event) {
     }
     unblockButton.disabled = true;
     try {
-      const response = await fetch("/api/bloqueios/delete", {
+      const response = await apiFetch("/api/bloqueios/delete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id })
       });
       const data = await response.json();
@@ -1038,9 +1195,8 @@ async function submitCancelSchedule(event) {
   state.pendingMutations += 1;
 
   try {
-    const response = await fetch("/api/agendamentos/delete", {
+    const response = await apiFetch("/api/agendamentos/delete", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, osId, origem, motivo, observacao })
     });
     const data = await response.json();
@@ -1113,9 +1269,8 @@ async function submitBlockSlot(event) {
   setBlockSlotStatus("Bloqueando...", "");
 
   try {
-    const response = await fetch("/api/bloqueios", {
+    const response = await apiFetch("/api/bloqueios", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     const data = await response.json();
@@ -1159,11 +1314,8 @@ async function sendSelectedConfirmations(event) {
   updateSelectionControls();
 
   try {
-    const response = await fetch("/api/agendamentos/send-confirmation", {
+    const response = await apiFetch("/api/agendamentos/send-confirmation", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
       body: JSON.stringify({ items })
     });
     const responseText = await response.text();
@@ -1210,11 +1362,8 @@ async function persistSchedulePayload({ payload, endpoint, editing, button, onSu
   updateScheduleSubmitButtonState();
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await apiFetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
       body: JSON.stringify(payload)
     });
 
@@ -1416,7 +1565,7 @@ async function lookupContractAndFill() {
   setContractLookupStatus("Buscando contrato no SGP...");
 
   try {
-    const response = await fetch(`/api/contrato?contrato=${encodeURIComponent(contractId)}`);
+    const response = await apiFetch(`/api/contrato?contrato=${encodeURIComponent(contractId)}`);
     const data = await response.json();
     if (!response.ok || !data.ok) {
       throw new Error(data.message || "Nao foi possivel consultar o contrato.");
@@ -1550,7 +1699,68 @@ function debounce(fn, wait) {
   };
 }
 
-function init() {
+async function init() {
+  const user = await checkAuth();
+  
+  if (elements.loginForm) {
+    elements.loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      const username = elements.loginUsername?.value || "";
+      const password = elements.loginPassword?.value || "";
+      
+      if (!username || !password) {
+        if (elements.loginError) {
+          elements.loginError.textContent = "Preencha usuario e senha.";
+          elements.loginError.style.display = "block";
+        }
+        return;
+      }
+      
+      if (elements.loginButton) {
+        elements.loginButton.disabled = true;
+        elements.loginButton.textContent = "Entrando...";
+      }
+      if (elements.loginError) {
+        elements.loginError.style.display = "none";
+      }
+      
+      try {
+        const loggedUser = await login(username, password);
+        showMainApp();
+        initMainApp();
+      } catch (error) {
+        if (elements.loginError) {
+          elements.loginError.textContent = error.message || "Falha na autenticacao.";
+          elements.loginError.style.display = "block";
+        }
+      } finally {
+        if (elements.loginButton) {
+          elements.loginButton.disabled = false;
+          elements.loginButton.textContent = "Entrar";
+        }
+      }
+    });
+  }
+  
+  if (user) {
+    showMainApp();
+    initMainApp();
+  } else {
+    showLoginScreen();
+  }
+}
+
+function updateAdminUiVisibility() {
+  if (state.isAdmin) {
+    document.body.classList.add("is-admin");
+  } else {
+    document.body.classList.remove("is-admin");
+  }
+}
+
+function initMainApp() {
+  updateAdminUiVisibility();
   const today = toLocalIsoDate(new Date());
   applySevenDayWindowFromStartDate(today);
   if (elements.blockSlotForm?.elements?.data) {
@@ -1562,9 +1772,19 @@ function init() {
   setBlockSlotStatus("");
   resetScheduleForm();
   wireEvents();
+  
+  if (elements.logoutButton) {
+    elements.logoutButton.addEventListener("click", async () => {
+      await logout();
+      showLoginScreen();
+    });
+  }
+  
   refreshDashboard().catch((error) => {
     console.error(error);
-    elements.noticeArea.innerHTML = `<div class="notice">Falha ao carregar o dashboard: ${error.message}</div>`;
+    if (elements.noticeArea) {
+      elements.noticeArea.innerHTML = `<div class="notice">Falha ao carregar o dashboard: ${error.message}</div>`;
+    }
   });
 }
 

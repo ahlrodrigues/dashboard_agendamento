@@ -4,12 +4,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Agenda SGP Call Center</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=2" />
+  <script src="/app.js?v=2" defer></script>
 </head>
 
 <body>
-  <div class="shell">
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-header">
+        <h1>Agenda SGP</h1>
+        <p>Acesse com seu usuario e senha do SGP</p>
+      </div>
+      <form id="loginForm">
+        <div class="field">
+          <label for="loginUsername">Usuario</label>
+          <input id="loginUsername" type="text" name="username" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="loginPassword">Senha</label>
+          <input id="loginPassword" type="password" name="password" required autocomplete="current-password" />
+        </div>
+        <div id="loginError" class="error-message" style="display: none;"></div>
+        <button type="submit" class="primary-button" id="loginButton">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="shell" id="mainApp" style="display: none;">
     <aside class="sidebar">
       <div class="brand-card">
         <p class="eyebrow">SGP + Call Center</p>
@@ -156,7 +181,7 @@
 	        </form>
 	      </section>
 
-	      <section class="panel">
+	      <section id="blockSlotSection" class="panel admin-only">
 	        <div class="panel-header">
 	          <h2>Bloqueio de horario</h2>
 	          <span class="badge neutral">Sem OS</span>
@@ -207,6 +232,7 @@
         <div class="hero-meta">
           <span id="sourceBadge" class="badge neutral">Fonte</span>
           <span id="snapshotLabel" class="snapshot">Sem dados</span>
+          <button id="logoutButton" class="ghost-button" type="button">Sair</button>
         </div>
       </header>
 
@@ -225,7 +251,7 @@
               <button id="nextWeekButton" class="ghost-button nav-button" type="button"
                 aria-label="Próxima semana">&rarr;</button>
             </div>
-            <div class="calendar-bulk-actions">
+            <div id="sendConfirmationSection" class="calendar-bulk-actions admin-only">
               <span id="sendSelectionCount" class="muted">Nenhuma selecionada</span>
               <button id="sendConfirmationButton" class="primary-button" type="button" disabled>Enviar confirmacao</button>
             </div>
@@ -342,8 +368,6 @@
       </div>
     </div>
   </dialog>
-
-  <script src="/app.js"></script>
 </body>
 
 </html>

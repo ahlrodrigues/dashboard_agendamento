@@ -9,6 +9,10 @@
     "app": "SEU_APP",
     "token": "SEU_TOKEN"
   },
+  "auth": {
+    "jwt_secret": "ALTERE_ESTE_SEGREDO_EM_PRODUCAO",
+    "admin_group": "agendamento"
+  },
   "dashboard": {
     "atualizacao_segundos": 300,
     "janela_dias_passado": 7,
