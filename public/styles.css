@@ -25,6 +25,21 @@ body.dark {
   --text: #e2e8f0;
   --muted: #94a3b8;
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+body.dark,
+body.dark * {
+  color: #ffffff !important;
+}
+
+body.dark h1,
+body.dark h2,
+body.dark h3,
+body.dark h4,
+body.dark h5,
+body.dark h6 {
+  color: #ffffff;
 }
 
 * {
@@ -441,9 +456,9 @@ select[multiple] {
 
 .hero-meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
 }
 
 .summary-grid {
