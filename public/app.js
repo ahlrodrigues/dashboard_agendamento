@@ -74,7 +74,8 @@ const elements = {
   loginPassword: document.querySelector("#loginPassword"),
   loginButton: document.querySelector("#loginButton"),
   loginError: document.querySelector("#loginError"),
-  logoutButton: document.querySelector("#logoutButton")
+  logoutButton: document.querySelector("#logoutButton"),
+  userBadge: document.querySelector("#userBadge")
 };
 
 function getAuthToken() {
@@ -1754,8 +1755,18 @@ async function init() {
 function updateAdminUiVisibility() {
   if (state.isAdmin) {
     document.body.classList.add("is-admin");
+    if (elements.userBadge) {
+      elements.userBadge.textContent = "Admin";
+      elements.userBadge.className = "badge success";
+      elements.userBadge.style.display = "inline-block";
+    }
   } else {
     document.body.classList.remove("is-admin");
+    if (elements.userBadge) {
+      elements.userBadge.textContent = "Operador";
+      elements.userBadge.className = "badge neutral";
+      elements.userBadge.style.display = "inline-block";
+    }
   }
 }
 

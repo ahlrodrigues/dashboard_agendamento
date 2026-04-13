@@ -8,8 +8,8 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Agenda SGP Call Center</title>
-  <link rel="stylesheet" href="/styles.css?v=2" />
-  <script src="/app.js?v=2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=3" />
+  <script src="/app.js?v=3" defer></script>
 </head>
 
 <body>
@@ -232,6 +232,7 @@
         <div class="hero-meta">
           <span id="sourceBadge" class="badge neutral">Fonte</span>
           <span id="snapshotLabel" class="snapshot">Sem dados</span>
+          <span id="userBadge" class="badge" style="display: none;"></span>
           <button id="logoutButton" class="ghost-button" type="button">Sair</button>
         </div>
       </header>
@@ -251,7 +252,7 @@
               <button id="nextWeekButton" class="ghost-button nav-button" type="button"
                 aria-label="Próxima semana">&rarr;</button>
             </div>
-            <div id="sendConfirmationSection" class="calendar-bulk-actions admin-only">
+            <div id="sendConfirmationSection" class="calendar-bulk-actions admin-only" style="display: none;">
               <span id="sendSelectionCount" class="muted">Nenhuma selecionada</span>
               <button id="sendConfirmationButton" class="primary-button" type="button" disabled>Enviar confirmacao</button>
             </div>
