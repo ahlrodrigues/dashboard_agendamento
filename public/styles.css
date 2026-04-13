@@ -447,6 +447,7 @@ select[multiple] {
   background:
     linear-gradient(120deg, rgba(255, 255, 255, 0.92), rgba(228, 240, 255, 0.82)),
     linear-gradient(135deg, rgba(28, 116, 217, 0.06), rgba(46, 175, 97, 0.08));
+  position: relative;
 }
 
 .hero h2 {
@@ -459,6 +460,22 @@ select[multiple] {
   flex-direction: row;
   align-items: center;
   gap: 12px;
+}
+
+.snapshot {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.hero-meta + .snapshot {
+  margin-top: 20px;
+}
+
+.hero > .snapshot {
+  position: absolute;
+  right: 0;
+  bottom: -24px;
 }
 
 .summary-grid {
