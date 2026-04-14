@@ -194,7 +194,7 @@ body.dark .modal-content {
 }
 
 body.is-admin .admin-only {
-  display: inline-block !important;
+  display: revert !important;
 }
 
 body.is-admin .calendar-bulk-actions.admin-only {

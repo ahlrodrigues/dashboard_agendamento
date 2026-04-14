@@ -722,23 +722,26 @@ function isBlockedScheduleItem(item) {
 }
 
 function renderChip(item) {
-  if (item.origem === "bloqueio" || item.status === "bloqueado") {
-    const routeLabel = escapeHtml(item.rota || "");
-    const reason = String(item.observacao || "").trim();
-    const title = reason ? ` title="${escapeHtml(reason)}"` : "";
-    const hiddenByFilter = !matchesCurrentFilters(item);
-    return `
-      <div class="chip bloqueado${hiddenByFilter ? " is-hidden-by-filter" : ""}"${title} tabindex="-1">
-        <div class="chip-actions">
-          <span></span>
-          <button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>
-        </div>
-        <strong>Horario bloqueado</strong>
-        <small>${routeLabel}${reason ? `<br />${escapeHtml(reason)}` : ""}</small>
-        <span class="chip-flag">Bloqueio</span>
-      </div>
-    `;
-  }
+	if (item.origem === "bloqueio" || item.status === "bloqueado") {
+	  const routeLabel = escapeHtml(item.rota || "");
+	  const reason = String(item.observacao || "").trim();
+	  const title = reason ? ` title="${escapeHtml(reason)}"` : "";
+	  const hiddenByFilter = !matchesCurrentFilters(item);
+	  const unblockButton = state.isAdmin
+	    ? `<button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>`
+	    : "";
+	  return `
+	    <div class="chip bloqueado${hiddenByFilter ? " is-hidden-by-filter" : ""}"${title} tabindex="-1">
+	      <div class="chip-actions">
+	        <span></span>
+	        ${unblockButton}
+	      </div>
+	      <strong>Horario bloqueado</strong>
+	      <small>${routeLabel}${reason ? `<br />${escapeHtml(reason)}` : ""}</small>
+	      <span class="chip-flag">Bloqueio</span>
+	    </div>
+	  `;
+	}
 
   const clientName = renderClientLink(item, item.cliente);
   const routeLabel = escapeHtml(item.rota || "");
@@ -998,6 +1001,9 @@ function confirmationStatusLabel(status, sent = false) {
 }
 
 function canRequestConfirmation(item) {
+  if (!state.isAdmin) {
+    return false;
+  }
   if (item.origem !== "sgp" || !String(item.osId || "").trim()) {
     return false;
   }
@@ -1024,6 +1030,9 @@ function updateSelectionControls() {
 }
 
 function canDeleteSchedule(item) {
+  if (!state.isAdmin) {
+    return false;
+  }
   return item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId);
 }
 
@@ -1363,12 +1372,15 @@ async function handleCalendarGridClick(event) {
     return;
   }
 
-  const unblockButton = event.target.closest(".chip-unblock-button");
-  if (unblockButton) {
-    const id = unblockButton.dataset.blockId || "";
-    if (!id) {
-      return;
-    }
+	const unblockButton = event.target.closest(".chip-unblock-button");
+	if (unblockButton) {
+	  if (!state.isAdmin) {
+	    return;
+	  }
+	  const id = unblockButton.dataset.blockId || "";
+	  if (!id) {
+	    return;
+	  }
     if (!confirm("Remover bloqueio deste horario?")) {
       return;
     }
@@ -1848,6 +1860,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 }
 
 async function lookupContractAndFill() {
+  if (!state.isAdmin) {
+    return;
+  }
   const contractId = elements.scheduleForm.elements.contrato.value.trim();
   if (!contractId) {
     resetContractLookupState();
