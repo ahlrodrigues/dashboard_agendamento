@@ -1499,10 +1499,15 @@ function isOpenServiceOrder(raw) {
     ""
   ).trim().toLowerCase();
 
-  if (statusId === "0") {
+  // Dashboard: considerar OS ativas (abertas ou pendentes).
+  // Observacao: o SGP costuma expor status_id 0=aberta e 1=pendente (podendo variar por instancia).
+  if (statusId === "0" || statusId === "1") {
     return true;
   }
-  return statusText === "aberta";
+  if (statusText === "aberta" || statusText === "pendente") {
+    return true;
+  }
+  return statusText.includes("aberta") || statusText.includes("pendent");
 }
 
 function pickClientName(raw) {
