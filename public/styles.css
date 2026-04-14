@@ -249,6 +249,13 @@ p {
   gap: 12px;
 }
 
+.hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .calendar-panel .panel-header {
   flex-direction: column;
   align-items: stretch;
@@ -473,10 +480,6 @@ body.dark .hero {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.hero-meta + .hero-meta {
-  margin-top: 8px;
 }
 
 .snapshot {
@@ -1182,4 +1185,5 @@ body.dark .toast {
   .shell { padding: 14px; }
   .calendar-grid { grid-template-columns: 80px repeat(var(--calendar-day-count, 7), 180px); }
   .hero, .panel-header { flex-direction: column; align-items: flex-start; }
+  .hero-actions { align-items: flex-start; }
 }
