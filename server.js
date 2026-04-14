@@ -1638,6 +1638,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   );
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
+  const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -1660,6 +1661,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
     confirmationRequestedAt: String(raw.confirmationRequestedAt || "").trim(),
     endereco: raw.endereco || raw.logradouro || "",
     motivo,
+    sgpStatus,
     observacao: raw.observacao || raw.descricao || raw.motivo || "",
     origem: source,
     raw
@@ -1678,6 +1680,25 @@ function normalizeMotivo(raw) {
     raw?.motivo_nome,
     raw?.motivo_os_nome,
     raw?.motivoos_nome
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function normalizeSgpStatus(raw) {
+  const candidates = [
+    raw?.status_descricao,
+    raw?.status_nome,
+    raw?.status_label,
+    raw?.status,
+    raw?.situacao
   ];
 
   for (const candidate of candidates) {
@@ -1712,6 +1733,7 @@ function normalizeManualSchedule(entry) {
     confirmationRequestedAt: entry.confirmationRequestedAt || "",
     endereco: entry.endereco || "",
     motivo: String(entry.motivo || "").trim(),
+    sgpStatus: "",
     observacao: entry.justificativa || entry.observacao || "",
     origem: "pre_agendamento_local",
     raw: entry
@@ -1967,6 +1989,7 @@ function serializeSchedule(item) {
     confirmationRequestedAt: item.confirmationRequestedAt || "",
     endereco: item.endereco,
     motivo: item.motivo || "",
+    sgpStatus: item.sgpStatus || "",
     observacao: item.observacao,
     origem: item.origem
   };
