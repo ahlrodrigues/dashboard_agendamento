@@ -656,6 +656,16 @@ body.dark .hero {
   gap: 8px;
 }
 
+.calendar-cell-overflow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calendar-cell-overflow[hidden] {
+  display: none !important;
+}
+
 .calendar-cell.has-overflow {
   position: relative;
   outline: 2px dashed rgba(28, 116, 217, 0.22);
