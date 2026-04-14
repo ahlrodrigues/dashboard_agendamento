@@ -557,6 +557,7 @@ function renderChip(item) {
   const routeLabel = escapeHtml(item.rota || "");
   const technicianName = getDisplayTechnicianName(item.tecnico);
   const technicianLabel = technicianName ? `Tecnico: ${escapeHtml(technicianName)}` : "Tecnico:";
+  const reasonLabel = `Motivo: ${escapeHtml(String(item.motivo || "").trim() || "-")}`;
   const confirmationLabel = confirmationStatusLabel(item.confirmationStatus, item.confirmationSent);
   const confirmationTitle = item.confirmationTitle ? ` title="${escapeHtml(item.confirmationTitle)}"` : "";
   const selected = state.selectedScheduleIds.has(item.id);
@@ -575,7 +576,7 @@ function renderChip(item) {
         ${deleteButton}
       </div>
       <strong>${clientName}</strong>
-      <small>${routeLabel}<br />${technicianLabel}<br />Confirmacao: ${confirmationLabel}</small>
+      <small>${routeLabel}<br />${technicianLabel}<br />${reasonLabel}<br />Confirmacao: ${confirmationLabel}</small>
       <span class="chip-flag">${canSendConfirmation ? `OS ${escapeHtml(item.osId || item.protocolo || "")}` : "Envio indisponivel"}</span>
     </div>
   `;

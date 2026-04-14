@@ -1632,6 +1632,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
     ""
   );
   const status = normalizeStatus(raw);
+  const motivo = normalizeMotivo(raw);
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -1653,6 +1654,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
     confirmationSent: Boolean(raw.confirmationSent),
     confirmationRequestedAt: String(raw.confirmationRequestedAt || "").trim(),
     endereco: raw.endereco || raw.logradouro || "",
+    motivo,
     observacao: raw.observacao || raw.descricao || raw.motivo || "",
     origem: source,
     raw
@@ -1661,6 +1663,26 @@ function normalizeSchedule(config, raw, source = "sgp") {
 
 function cryptoRandomId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function normalizeMotivo(raw) {
+  const candidates = [
+    raw?.motivo,
+    raw?.motivo_os,
+    raw?.motivoos,
+    raw?.motivo_nome,
+    raw?.motivo_os_nome,
+    raw?.motivoos_nome
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 function normalizeManualSchedule(entry) {
@@ -1684,6 +1706,7 @@ function normalizeManualSchedule(entry) {
     confirmationSent: Boolean(entry.confirmationSent),
     confirmationRequestedAt: entry.confirmationRequestedAt || "",
     endereco: entry.endereco || "",
+    motivo: String(entry.motivo || "").trim(),
     observacao: entry.justificativa || entry.observacao || "",
     origem: "pre_agendamento_local",
     raw: entry
@@ -1938,6 +1961,7 @@ function serializeSchedule(item) {
     confirmationSent: Boolean(item.confirmationSent),
     confirmationRequestedAt: item.confirmationRequestedAt || "",
     endereco: item.endereco,
+    motivo: item.motivo || "",
     observacao: item.observacao,
     origem: item.origem
   };
