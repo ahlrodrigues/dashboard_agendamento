@@ -16,7 +16,8 @@ const BLOCKED_SLOTS_PATH = path.join(DATA_DIR, "blocked-slots.json");
 const CONFIRMATION_DISPATCH_LOG_PATH = path.join(DATA_DIR, "confirmation-dispatch-log.json");
 const SCHEDULE_FLAGS_PATH = path.join(DATA_DIR, "schedule-flags.json");
 
-const DASHBOARD_USER_TAG_RE = /\[dashboard_user=([^\]\n\r]{1,120})\]/i;
+const DASHBOARD_USER_MARK_RE = /\[dashboard_user=([^\]\n\r]{1,120})\]/i;
+const DASHBOARD_USER_AUDIT_RE = /^Agendado por:\s*(.+?)\s*em\s*(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}:\d{2}:\d{2})\s*$/im;
 
 function sanitizeDashboardUserLabel(value) {
   return String(value || "")
@@ -27,22 +28,55 @@ function sanitizeDashboardUserLabel(value) {
     .slice(0, 120);
 }
 
-function extractDashboardUserTag(text) {
-  const raw = String(text || "");
-  const match = raw.match(DASHBOARD_USER_TAG_RE);
-  const createdBy = match ? sanitizeDashboardUserLabel(match[1]) : "";
-  const without = raw.replace(DASHBOARD_USER_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+function formatBrazilAuditTimestamp(date) {
+  const now = date instanceof Date ? date : new Date();
+  const isoDate = toLocalIsoDate(now);
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  const formatted = toBrazilDateTime(isoDate, `${hh}:${mm}:${ss}`);
+  return formatted ? formatted.replace(" ", " - ") : "";
+}
+
+function extractDashboardCreatedBy(text) {
+  let raw = String(text || "");
+  let createdBy = "";
+
+  const auditMatch = raw.match(DASHBOARD_USER_AUDIT_RE);
+  if (auditMatch) {
+    createdBy = sanitizeDashboardUserLabel(auditMatch[1]);
+  }
+  raw = raw.replace(DASHBOARD_USER_AUDIT_RE, "");
+
+  if (!createdBy) {
+    const markMatch = raw.match(DASHBOARD_USER_MARK_RE);
+    if (markMatch) {
+      createdBy = sanitizeDashboardUserLabel(markMatch[1]);
+    }
+  }
+  raw = raw.replace(DASHBOARD_USER_MARK_RE, "");
+
+  const without = raw.replace(/\n{3,}/g, "\n\n").trim();
   return { text: without, createdBy };
 }
 
-function ensureDashboardUserTag(text, createdBy) {
-  const base = extractDashboardUserTag(text).text;
+function hasDashboardCreatedByMetadata(text) {
+  const raw = String(text || "");
+  return DASHBOARD_USER_AUDIT_RE.test(raw) || DASHBOARD_USER_MARK_RE.test(raw);
+}
+
+function ensureDashboardCreatedByAudit(text, createdBy, date = new Date()) {
+  const base = String(text || "").trim();
   const label = sanitizeDashboardUserLabel(createdBy);
   if (!label) {
     return base;
   }
-  const tag = `[dashboard_user=${label}]`;
-  return base ? `${base}\n${tag}` : tag;
+  if (hasDashboardCreatedByMetadata(base)) {
+    return base;
+  }
+  const stamp = formatBrazilAuditTimestamp(date);
+  const auditLine = stamp ? `Agendado por: ${label} em ${stamp}` : `Agendado por: ${label}`;
+  return base ? `${base}\n${auditLine}` : auditLine;
 }
 
 const DEFAULT_STATUSES = [0, 1];
@@ -59,6 +93,8 @@ let sgpDispatchQueue = Promise.resolve();
 let lastSgpDispatchAt = 0;
 let confirmationResendJobTimer = null;
 let confirmationResendJobRunning = false;
+
+const sgpOperatorSessions = new Map();
 
 const DASHBOARD_VERSION = (() => {
   try {
@@ -281,6 +317,60 @@ function createSimpleJwt(payload, secret) {
   return `${header}.${body}.${signature}`;
 }
 
+function generateSessionId() {
+  return `sess-${Date.now()}-${cryptoRandomId()}`;
+}
+
+function storeSgpOperatorSession({ sessionId, username, password, ttlMs }) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedUsername = String(username || "").trim();
+  const normalizedPassword = String(password || "").trim();
+  if (!normalizedSessionId || !normalizedUsername || !normalizedPassword) {
+    return false;
+  }
+  const token = Buffer.from(`${normalizedUsername}:${normalizedPassword}`).toString("base64");
+  sgpOperatorSessions.set(normalizedSessionId, {
+    username: normalizedUsername,
+    password: normalizedPassword,
+    basicAuthHeader: `Basic ${token}`,
+    expiresAt: Date.now() + Math.max(60_000, Number(ttlMs) || (8 * 60 * 60 * 1000))
+  });
+  return true;
+}
+
+function readSgpOperatorSession(sessionId) {
+  const key = String(sessionId || "").trim();
+  if (!key) return null;
+  const entry = sgpOperatorSessions.get(key);
+  if (!entry) return null;
+  if (Date.now() > Number(entry.expiresAt || 0)) {
+    sgpOperatorSessions.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function clearSgpOperatorSession(sessionId) {
+  const key = String(sessionId || "").trim();
+  if (!key) return false;
+  return sgpOperatorSessions.delete(key);
+}
+
+function getSgpAuthFromUserPayload(userPayload) {
+  const sessionId = String(userPayload?.sgpSessionId || "").trim();
+  const session = readSgpOperatorSession(sessionId);
+  if (!session) {
+    return null;
+  }
+  return {
+    username: session.username,
+    password: session.password,
+    headers: {
+      Authorization: session.basicAuthHeader
+    }
+  };
+}
+
 function simpleHmac(data, secret) {
   const crypto = require("crypto");
   return crypto.createHmac("sha256", secret).update(data).digest("base64url");
@@ -390,6 +480,13 @@ function buildAuthHeaders(config) {
   }
   const token = Buffer.from(`${username}:${password}`).toString("base64");
   return { Authorization: `Basic ${token}` };
+}
+
+function buildSgpAuthHeaders(config, operatorAuth) {
+  if (operatorAuth?.headers?.Authorization) {
+    return { Authorization: operatorAuth.headers.Authorization };
+  }
+  return buildAuthHeaders(config);
 }
 
 function buildBasePayload(config) {
@@ -649,10 +746,10 @@ function toBrazilDateTime(date, time) {
   return `${day}/${month}/${year} ${fullTime}`;
 }
 
-async function createSgpWebSession(config) {
+async function createSgpWebSession(config, credentials = null) {
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
-  const username = String(config.basic_auth?.username || "").trim();
-  const password = String(config.basic_auth?.password || "").trim();
+  const username = String(credentials?.username || config.basic_auth?.username || "").trim();
+  const password = String(credentials?.password || config.basic_auth?.password || "").trim();
   if (!baseUrl || !username || !password) {
     throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
   }
@@ -859,7 +956,7 @@ async function fetchConfirmationUrlForOs(config, osId) {
   return details.confirmationUrl || "";
 }
 
-async function fetchConfirmationDetailsForOs(config, osId) {
+async function fetchConfirmationDetailsForOs(config, osId, credentials = null) {
   const normalizedOsId = String(osId || "").trim();
   if (!normalizedOsId) {
     return {
@@ -875,7 +972,7 @@ async function fetchConfirmationDetailsForOs(config, osId) {
     return applyConfirmationDispatchState(cached, readConfirmationDispatchEntry(normalizedOsId));
   }
 
-  const session = await createSgpWebSession(config);
+  const session = await createSgpWebSession(config, credentials);
   const details = await fetchConfirmationDetailsForOsWithSession(config, session, normalizedOsId);
   writeConfirmationCache(normalizedOsId, details);
   return details;
@@ -919,8 +1016,8 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
   return extractConfirmationDetailsFromOccurrenceHtml(session.baseUrl, html, normalizedOsId, dispatchEntry);
 }
 
-async function updateScheduleViaSgpWebForm(config, osId, entry) {
-  const session = await createSgpWebSession(config);
+async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
+  const session = await createSgpWebSession(config, credentials);
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
@@ -1028,7 +1125,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry) {
   };
 }
 
-async function queueConfirmationDispatch(config, item) {
+async function queueConfirmationDispatch(config, item, credentials = null) {
   const osId = String(item?.osId || "").trim();
   if (!osId) {
     throw new Error("OS nao informada para envio da confirmacao.");
@@ -1067,7 +1164,7 @@ async function queueConfirmationDispatch(config, item) {
     observacao: String(item?.observacao || "").trim()
   };
 
-  void enqueueSgpDispatch(config, async () => {
+	  void enqueueSgpDispatch(config, async () => {
     writeConfirmationDispatchEntry(osId, {
       state: "processing",
       processingAt: new Date().toISOString(),
@@ -1076,12 +1173,12 @@ async function queueConfirmationDispatch(config, item) {
       resendCount: nextResendCount
     });
 
-    try {
-      const response = await updateScheduleViaSgpWebForm(config, osId, entry);
-      const mutationError = getSgpMutationError(response);
-      if (mutationError) {
-        throw new Error(mutationError);
-      }
+	    try {
+	      const response = await updateScheduleViaSgpWebForm(config, osId, entry, credentials);
+	      const mutationError = getSgpMutationError(response);
+	      if (mutationError) {
+	        throw new Error(mutationError);
+	      }
       if (!response?.confirmationDispatchRequested) {
         writeConfirmationDispatchEntry(osId, {
           state: "manual",
@@ -1090,13 +1187,13 @@ async function queueConfirmationDispatch(config, item) {
         });
         return;
       }
-      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId).catch(() => ({
-        confirmationUrl: "",
-        confirmationStatus: "aguardando_confirmacao",
-        confirmationTitle: "",
-        confirmationSent: true,
-        confirmationRequestedAt: new Date().toISOString()
-      })));
+	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, credentials).catch(() => ({
+	        confirmationUrl: "",
+	        confirmationStatus: "aguardando_confirmacao",
+	        confirmationTitle: "",
+	        confirmationSent: true,
+	        confirmationRequestedAt: new Date().toISOString()
+	      })));
     } catch (error) {
       writeConfirmationDispatchEntry(osId, {
         state: "error",
@@ -1226,7 +1323,7 @@ function ensureConfirmationResendJobStarted() {
   void processPendingConfirmationResends();
 }
 
-async function postToSgp(config, endpointPath, payload) {
+async function postToSgp(config, endpointPath, payload, operatorAuth = null) {
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   if (!baseUrl) {
     throw new Error("url_base nao configurada.");
@@ -1252,7 +1349,7 @@ async function postToSgp(config, endpointPath, payload) {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      ...buildAuthHeaders(config)
+      ...buildSgpAuthHeaders(config, operatorAuth)
     },
     body,
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
@@ -1333,7 +1430,7 @@ function getSgpMutationError(data) {
   return "";
 }
 
-async function listServiceOrders(config, { startDate, endDate }) {
+async function listServiceOrders(config, { startDate, endDate }, operatorAuth = null) {
   const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
   const statuses = Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
     ? config.agendamento.statuses_consulta
@@ -1352,7 +1449,7 @@ async function listServiceOrders(config, { startDate, endDate }) {
         data_agendamento_fim: endDate
       };
 
-      const response = await postToSgp(config, endpoint, payload);
+      const response = await postToSgp(config, endpoint, payload, operatorAuth);
       const chunk = extractListFromResponse(response);
       if (!Array.isArray(chunk)) {
         throw new Error("Formato inesperado na lista de ordens de servico.");
@@ -1369,7 +1466,7 @@ async function listServiceOrders(config, { startDate, endDate }) {
   return dedupeBy(results, (item) => String(item.id || item.os_id || item.pk || JSON.stringify(item)));
 }
 
-async function fetchServiceOrderById(config, osId) {
+async function fetchServiceOrderById(config, osId, operatorAuth = null) {
   const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
   const statuses = Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
     ? config.agendamento.statuses_consulta
@@ -1381,7 +1478,7 @@ async function fetchServiceOrderById(config, osId) {
     const limit = 500;
     while (true) {
       const payload = { status, offset, limit };
-      const response = await postToSgp(config, endpoint, payload);
+      const response = await postToSgp(config, endpoint, payload, operatorAuth);
       const chunk = extractListFromResponse(response);
       if (!Array.isArray(chunk)) {
         throw new Error("Formato inesperado na busca da OS por ID.");
@@ -1402,7 +1499,7 @@ async function fetchServiceOrderById(config, osId) {
   return null;
 }
 
-async function lookupContract(config, contractId) {
+async function lookupContract(config, contractId, operatorAuth = null) {
   const endpoint = String(config.agendamento?.endpoint_contrato || "/api/suporte/contrato/list/").trim();
   if (!endpoint) {
     throw new Error("Endpoint de consulta de contrato nao configurado.");
@@ -1418,7 +1515,7 @@ async function lookupContract(config, contractId) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...buildAuthHeaders(config)
+      ...buildSgpAuthHeaders(config, operatorAuth)
     },
     body: JSON.stringify({
       contrato_id: String(contractId || "").trim()
@@ -1799,7 +1896,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardUserTag(raw.observacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -1874,7 +1971,7 @@ function normalizeSgpStatus(raw) {
 }
 
 function normalizeManualSchedule(entry) {
-  const extractedObs = extractDashboardUserTag(entry.justificativa || entry.observacao || "");
+  const extractedObs = extractDashboardCreatedBy(entry.justificativa || entry.observacao || "");
   return {
     id: entry.id || `manual-${cryptoRandomId()}`,
     osId: "",
@@ -2162,7 +2259,7 @@ function serializeSchedule(item) {
   };
 }
 
-async function enrichSchedulesWithConfirmation(config, schedules) {
+async function enrichSchedulesWithConfirmation(config, schedules, credentials = null) {
   const sgpSchedules = schedules.filter((item) => item.origem === "sgp" && String(item.osId || "").trim());
   if (!sgpSchedules.length) {
     return schedules;
@@ -2186,7 +2283,7 @@ async function enrichSchedulesWithConfirmation(config, schedules) {
     return schedules;
   }
 
-  const session = await createSgpWebSession(config);
+  const session = await createSgpWebSession(config, credentials);
   await runWithConcurrencyLimit(pending, 3, async (item) => {
     try {
       const details = await fetchConfirmationDetailsForOsWithSession(config, session, item.osId);
@@ -2211,6 +2308,7 @@ async function enrichSchedulesWithConfirmation(config, schedules) {
 
 async function getDashboardData(query, authUser = null) {
   const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
   const today = toLocalIsoDate(new Date());
   const selectedDate = isoDateOnly(query.get("data")) || today;
   const startDate = isoDateOnly(query.get("inicio")) || plusDays(selectedDate, -Number(config.dashboard.janela_dias_passado || 7));
@@ -2230,13 +2328,13 @@ async function getDashboardData(query, authUser = null) {
   let schedules = [];
 
   try {
-    const sgpRows = await listServiceOrders(config, { startDate, endDate });
+    const sgpRows = await listServiceOrders(config, { startDate, endDate }, operatorAuth);
     schedules = sgpRows
       .filter((item) => isExternalServiceOrder(item))
       .filter((item) => isOpenServiceOrder(item))
       .map((item) => normalizeSchedule(config, item, "sgp"))
       .filter((item) => item.data);
-    schedules = await enrichSchedulesWithConfirmation(config, schedules);
+    schedules = await enrichSchedulesWithConfirmation(config, schedules, operatorAuth);
     if (!schedules.length) {
       sourceMode = "mock";
       notices.push("Nenhum agendamento retornado pelo SGP para o periodo consultado. Exibindo dados de demonstracao.");
@@ -2394,7 +2492,7 @@ function buildCreateCallPayload(config, entry) {
   return payload;
 }
 
-async function postJsonToSgp(config, endpointPath, payload) {
+async function postJsonToSgp(config, endpointPath, payload, operatorAuth = null) {
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   if (!baseUrl) {
     throw new Error("url_base nao configurada.");
@@ -2405,7 +2503,7 @@ async function postJsonToSgp(config, endpointPath, payload) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...buildAuthHeaders(config)
+      ...buildSgpAuthHeaders(config, operatorAuth)
     },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
@@ -2442,7 +2540,7 @@ async function postJsonToSgp(config, endpointPath, payload) {
   }
 }
 
-async function closeSgpSchedule(config, osId) {
+async function closeSgpSchedule(config, osId, operatorAuth = null) {
   if (hasAppTokenAuth(config)) {
     const endpoint = `/api/central/chamado/update/${encodeURIComponent(String(osId || "").trim())}/`;
     return {
@@ -2452,7 +2550,7 @@ async function closeSgpSchedule(config, osId) {
         ocorrencia_encerrar: 1,
         os_data_agendamento: "",
         notificar_cliente: ""
-      })
+      }, operatorAuth)
     };
   }
 
@@ -2462,7 +2560,7 @@ async function closeSgpSchedule(config, osId) {
     response: await postToSgp(config, endpoint, {
       os_status: 1,
       os_data_finalizacao: currentDateTimeForSgp()
-    })
+    }, operatorAuth)
   };
 }
 
@@ -2518,8 +2616,15 @@ function summarizeConflictItems(items) {
     .join(", ");
 }
 
-async function createBlockedSlot(payload) {
+async function createBlockedSlot(payload, authUser = null) {
   const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (authUser && !operatorAuth) {
+    return {
+      statusCode: 401,
+      body: { ok: false, message: "Sessao do SGP expirada. Faca login novamente." }
+    };
+  }
   const entry = {
     rota: String(payload.rota || payload.pop || "").trim(),
     data: isoDateOnly(payload.data),
@@ -2574,7 +2679,11 @@ async function createBlockedSlot(payload) {
   // Se houver qualquer OS no intervalo, nao permite criar bloqueio.
   const candidateTimes = [entry.horario_inicio, entry.horario_fim].filter(Boolean);
   for (const timeKey of candidateTimes) {
-    const conflictCheck = await findPopSlotConflicts(config, { rota: entry.rota, data: entry.data, horario: timeKey }, { includeBlocks: false });
+    const conflictCheck = await findPopSlotConflicts(
+      config,
+      { rota: entry.rota, data: entry.data, horario: timeKey },
+      { includeBlocks: false, operatorAuth }
+    );
     if (conflictCheck.conflicts.length) {
       const summary = summarizeConflictItems(conflictCheck.conflicts);
       return {
@@ -2624,7 +2733,7 @@ async function removeBlockedSlot(payload) {
 async function findPopSlotConflicts(
   config,
   { rota, data, horario },
-  { ignoreId = "", ignoreOsId = "", ignoreProtocolo = "", includeBlocks = true, includeSchedules = true } = {}
+  { ignoreId = "", ignoreOsId = "", ignoreProtocolo = "", includeBlocks = true, includeSchedules = true, operatorAuth = null } = {}
 ) {
   const rotaKey = normalizePopKey(rota);
   const dateKey = isoDateOnly(data);
@@ -2645,7 +2754,7 @@ async function findPopSlotConflicts(
 
   if (includeSchedules) {
     try {
-      const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey });
+      const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey }, operatorAuth);
       checkedSgp = true;
       schedules.push(
         ...sgpRows
@@ -2695,8 +2804,18 @@ async function findPopSlotConflicts(
 
 async function createSchedule(payload, authUser = null) {
   const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (authUser && !operatorAuth) {
+    return {
+      statusCode: 401,
+      body: {
+        ok: false,
+        message: "Sessao do SGP expirada. Faca login novamente."
+      }
+    };
+  }
   const duplicatePeriod = truthyFlag(payload?.duplicatePeriod);
-  const createdBy = sanitizeDashboardUserLabel(authUser?.nome || authUser?.sub || "");
+  const createdBy = sanitizeDashboardUserLabel(authUser?.sub || "");
   const payloadCreatedBy = sanitizeDashboardUserLabel(payload?.createdBy || "");
   const entry = {
     cliente: String(payload.cliente || "").trim(),
@@ -2745,9 +2864,9 @@ async function createSchedule(payload, authUser = null) {
     try {
       const entryForSgp = {
         ...entry,
-        justificativa: ensureDashboardUserTag(entry.justificativa, entry.createdBy)
+        justificativa: ensureDashboardCreatedByAudit(entry.justificativa, entry.createdBy)
       };
-      const response = await postJsonToSgp(config, endpoint, buildCreateCallPayload(config, entryForSgp));
+      const response = await postJsonToSgp(config, endpoint, buildCreateCallPayload(config, entryForSgp), operatorAuth);
       const rows = extractListFromResponse(response);
       const created = Array.isArray(rows) && rows.length ? rows[0] : response;
       const createdOsId = String(created?.os_id || created?.id || created?.osId || "").trim();
@@ -2769,7 +2888,7 @@ async function createSchedule(payload, authUser = null) {
 
       if (createdOsId) {
         try {
-          confirmationDetails = await fetchConfirmationDetailsForOs(config, createdOsId);
+          confirmationDetails = await fetchConfirmationDetailsForOs(config, createdOsId, operatorAuth);
         } catch (error) {
           confirmationDetails = {
             confirmationUrl: "",
@@ -2782,20 +2901,20 @@ async function createSchedule(payload, authUser = null) {
 
         if (
           canRequestCustomerConfirmation(entry) &&
-          String(config.basic_auth?.username || "").trim() &&
-          String(config.basic_auth?.password || "").trim()
+          String(operatorAuth?.username || "").trim() &&
+          String(operatorAuth?.password || "").trim()
         ) {
-          try {
-            await queueConfirmationDispatch(config, {
-              id: createdOsId,
-              osId: createdOsId,
-              origem: "sgp",
-              ...entry
-            });
-            autoQueued = true;
-            confirmationDetails.confirmationUrl = "";
-            confirmationDetails.confirmationStatus = "na_fila_envio";
-            confirmationDetails.confirmationTitle = "";
+	          try {
+	            await queueConfirmationDispatch(config, {
+	              id: createdOsId,
+	              osId: createdOsId,
+	              origem: "sgp",
+	              ...entry
+	            }, operatorAuth);
+	            autoQueued = true;
+	            confirmationDetails.confirmationUrl = "";
+	            confirmationDetails.confirmationStatus = "na_fila_envio";
+	            confirmationDetails.confirmationTitle = "";
             confirmationDetails.confirmationRequestedAt = "";
             confirmationDetails.confirmationSent = false;
           } catch (error) {
@@ -2869,6 +2988,16 @@ async function createSchedule(payload, authUser = null) {
 
 async function updateSchedule(payload, authUser = null) {
   const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (authUser && !operatorAuth) {
+    return {
+      statusCode: 401,
+      body: {
+        ok: false,
+        message: "Sessao do SGP expirada. Faca login novamente."
+      }
+    };
+  }
   const id = String(payload.id || "").trim();
   const origem = String(payload.origem || "").trim();
   const osId = String(payload.osId || "").trim();
@@ -2967,7 +3096,7 @@ async function updateSchedule(payload, authUser = null) {
       };
     }
 
-    const serviceOrder = await fetchServiceOrderById(config, osId).catch(() => null);
+    const serviceOrder = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
     if (serviceOrder && !isExternalServiceOrder(serviceOrder)) {
       return {
         statusCode: 403,
@@ -2980,19 +3109,19 @@ async function updateSchedule(payload, authUser = null) {
       };
     }
 
-    if (!String(config.basic_auth?.username || "").trim() || !String(config.basic_auth?.password || "").trim()) {
+    if (!String(operatorAuth?.username || "").trim() || !String(operatorAuth?.password || "").trim()) {
       return {
         statusCode: 501,
         body: {
           ok: false,
-          message: "A configuracao atual do SGP nao permite alterar data/horario de OS aberta pela interface web. Preencha basic_auth.username e basic_auth.password com valores validos."
+          message: "Sessao do SGP indisponivel para editar OS pela interface web. Faca login novamente."
         }
       };
     }
 
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
-        const observacaoForSgp = ensureDashboardUserTag(entry.justificativa || entry.observacao || "", entry.createdBy);
+        const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
 		    const sgpPayload = {
 		      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 		      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
@@ -3005,7 +3134,7 @@ async function updateSchedule(payload, authUser = null) {
 
     let response;
     try {
-      response = await enqueueSgpDispatch(config, () => updateScheduleViaSgpWebForm(config, osId, entry));
+      response = await enqueueSgpDispatch(config, () => updateScheduleViaSgpWebForm(config, osId, entry, operatorAuth));
     } catch (error) {
       logSgpScheduleUpdate("error", {
         osId,
@@ -3095,7 +3224,7 @@ async function updateSchedule(payload, authUser = null) {
         mode: "sgp",
         message: `OS ${osId} atualizada no SGP com sucesso.`,
         response,
-        ...(await fetchConfirmationDetailsForOs(config, osId).catch(() => ({
+        ...(await fetchConfirmationDetailsForOs(config, osId, operatorAuth).catch(() => ({
           confirmationUrl: "",
           confirmationStatus: "sem_confirmacao",
           confirmationTitle: "",
@@ -3115,7 +3244,7 @@ async function updateSchedule(payload, authUser = null) {
   };
 }
 
-async function getContractData(contractId) {
+async function getContractData(contractId, authUser = null) {
   const normalizedContractId = String(contractId || "").trim();
   if (!normalizedContractId) {
     return {
@@ -3128,9 +3257,19 @@ async function getContractData(contractId) {
   }
 
   const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (authUser && !operatorAuth) {
+    return {
+      statusCode: 401,
+      body: {
+        ok: false,
+        message: "Sessao do SGP expirada. Faca login novamente."
+      }
+    };
+  }
   const [contract, openOses] = await Promise.all([
-    lookupContract(config, normalizedContractId),
-    lookupOpenOsForContract(config, normalizedContractId).catch(err => {
+    lookupContract(config, normalizedContractId, operatorAuth),
+    lookupOpenOsForContract(config, normalizedContractId, operatorAuth).catch(err => {
       console.error("OS lookup falhou (nao critico):", err.message);
       return [];
     })
@@ -3146,7 +3285,7 @@ async function getContractData(contractId) {
   };
 }
 
-async function deleteSchedule(payload) {
+async function deleteSchedule(payload, authUser = null) {
   const id = String(payload.id || "").trim();
   const origem = String(payload.origem || "").trim();
   const osId = String(payload.osId || "").trim();
@@ -3193,7 +3332,17 @@ async function deleteSchedule(payload) {
     }
 
     const config = loadConfig();
-    const result = await closeSgpSchedule(config, osId);
+    const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+    if (authUser && !operatorAuth) {
+      return {
+        statusCode: 401,
+        body: {
+          ok: false,
+          message: "Sessao do SGP expirada. Faca login novamente."
+        }
+      };
+    }
+    const result = await closeSgpSchedule(config, osId, operatorAuth);
     const message = result.mode === "central_chamado_update"
       ? "Agendamento encerrado no SGP com OS e ocorrencia fechadas."
       : "Agendamento encerrado no SGP com fechamento da OS. A ocorrencia nao foi encerrada porque a configuracao atual nao usa app/token.";
@@ -3217,7 +3366,7 @@ async function deleteSchedule(payload) {
   };
 }
 
-async function requestConfirmationDispatch(payload) {
+async function requestConfirmationDispatch(payload, authUser = null) {
   const items = Array.isArray(payload?.items) ? payload.items : [];
   if (!items.length) {
     return {
@@ -3230,12 +3379,13 @@ async function requestConfirmationDispatch(payload) {
   }
 
   const config = loadConfig();
-  if (!String(config.basic_auth?.username || "").trim() || !String(config.basic_auth?.password || "").trim()) {
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (authUser && !operatorAuth) {
     return {
-      statusCode: 501,
+      statusCode: 401,
       body: {
         ok: false,
-        message: "A configuracao atual do SGP nao permite solicitar envio pela interface web."
+        message: "Sessao do SGP expirada. Faca login novamente."
       }
     };
   }
@@ -3288,7 +3438,7 @@ async function requestConfirmationDispatch(payload) {
     };
   }
 
-  await Promise.all(validItems.map((item) => queueConfirmationDispatch(config, item)));
+  await Promise.all(validItems.map((item) => queueConfirmationDispatch(config, item, operatorAuth)));
 
   return {
     statusCode: 202,
@@ -3378,6 +3528,10 @@ const server = http.createServer(async (req, res) => {
 
         const userInfo = await fetchSgpUserInfo(config, username, password);
         const isAdmin = userHasAdminGroup(userInfo, config);
+
+        const sessionId = generateSessionId();
+        const ttlMs = 8 * 60 * 60 * 1000;
+        storeSgpOperatorSession({ sessionId, username, password, ttlMs });
         
         const tokenPayload = {
           sub: userInfo.usuario,
@@ -3385,8 +3539,9 @@ const server = http.createServer(async (req, res) => {
           email: userInfo.email,
           grupos: userInfo.grupos || [],
           isAdmin,
+          sgpSessionId: sessionId,
           iat: Date.now(),
-          exp: Date.now() + (8 * 60 * 60 * 1000)
+          exp: Date.now() + ttlMs
         };
         
         const token = createSimpleJwt(tokenPayload, config.auth.jwt_secret);
@@ -3408,6 +3563,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/auth/logout") {
+      const token = extractBearerToken(req);
+      if (token) {
+        const payload = verifySimpleJwt(token, config.auth.jwt_secret);
+        if (payload?.sgpSessionId) {
+          clearSgpOperatorSession(payload.sgpSessionId);
+        }
+      }
       sendJson(res, 200, { ok: true, message: "Logout realizado." });
       return;
     }
@@ -3464,7 +3626,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && parsedUrl.pathname === "/api/contrato") {
-      const result = await getContractData(parsedUrl.searchParams.get("contrato"));
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
+      const result = await getContractData(parsedUrl.searchParams.get("contrato"), req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -3497,7 +3663,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = await collectRequestBody(req);
-      const result = await deleteSchedule(payload);
+      const result = await deleteSchedule(payload, req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -3508,7 +3674,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = await collectRequestBody(req);
-      const result = await createBlockedSlot(payload);
+      const result = await createBlockedSlot(payload, req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -3529,8 +3695,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && normalizedPathname === "/api/agendamentos/send-confirmation") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
       const payload = await collectRequestBody(req);
-      const result = await requestConfirmationDispatch(payload);
+      const result = await requestConfirmationDispatch(payload, req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -3568,7 +3738,7 @@ function buildOsUrl(config, osId) {
 }
 
 
-async function lookupOpenOsForContract(config, contractId) {
+async function lookupOpenOsForContract(config, contractId, operatorAuth = null) {
   try {
     const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
     const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
@@ -3582,7 +3752,7 @@ async function lookupOpenOsForContract(config, contractId) {
         contrato: normalizedContractId
       };
       try {
-        const response = await postToSgp(config, endpoint, payload);
+        const response = await postToSgp(config, endpoint, payload, operatorAuth);
         const chunk = extractListFromResponse(response);
         if (Array.isArray(chunk)) {
           allRows.push(...chunk);
