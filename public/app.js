@@ -2,6 +2,7 @@ const state = {
   data: null,
   schedulesById: new Map(),
   selectedScheduleIds: new Set(),
+  expandedCalendarCells: new Set(),
   sendingConfirmation: false,
   pendingMutations: 0,
   autoRefreshTimer: null,
@@ -488,16 +489,49 @@ function renderCalendar(grid) {
   for (const slot of grid.slots) {
     fragments.push(`<div class="slot-label">${slot}</div>`);
     for (const day of grid.days) {
+      const cellKey = `${day.date}__${slot}`;
       const items = (grid.cells[day.date]?.[slot] || []).map((item) => state.schedulesById.get(item.id) || item);
+      const visibility = items.map((item) => ({ item, isVisible: matchesCurrentFilters(item) }));
+      const visibleItems = visibility.filter((entry) => entry.isVisible).map((entry) => entry.item);
+      const blockedItems = visibleItems.filter(isBlockedScheduleItem);
+      const scheduleItems = visibleItems.filter((item) => !isBlockedScheduleItem(item));
+      const hiddenOverflowItems = scheduleItems.length > 1 ? scheduleItems.slice(1) : [];
+      const shouldExpand = hiddenOverflowItems.length ? state.expandedCalendarCells.has(cellKey) : false;
+
+      const cellClass = hiddenOverflowItems.length ? "calendar-cell has-overflow" : "calendar-cell";
+      const buttonLabel = hiddenOverflowItems.length === 1 ? "Ver +1 OS" : `Ver +${hiddenOverflowItems.length} OS`;
+
       fragments.push(`
-        <div class="calendar-cell">
-          ${items.length ? items.map(renderChip).join("") : ""}
+        <div class="${cellClass}${shouldExpand ? " is-expanded" : ""}" data-cell-key="${escapeHtml(cellKey)}">
+          ${(blockedItems || []).map(renderChip).join("")}
+          ${scheduleItems.length ? renderChip(scheduleItems[0]) : ""}
+          ${
+            hiddenOverflowItems.length
+              ? `
+                <div class="calendar-cell-overflow"${shouldExpand ? "" : " hidden"}>
+                  ${hiddenOverflowItems.map(renderChip).join("")}
+                </div>
+                <button class="cell-expand-button" type="button" data-action="toggle-cell-overflow" data-cell-key="${escapeHtml(cellKey)}" aria-expanded="${shouldExpand ? "true" : "false"}" title="${escapeHtml(buttonLabel)}">
+                  ${escapeHtml(shouldExpand ? "Recolher" : buttonLabel)}
+                </button>
+              `
+              : ""
+          }
+          ${
+            scheduleItems.length === 0 && blockedItems.length === 0
+              ? items.map(renderChip).join("")
+              : ""
+          }
         </div>
       `);
     }
   }
 
   elements.calendarGrid.innerHTML = fragments.join("");
+}
+
+function isBlockedScheduleItem(item) {
+  return item?.origem === "bloqueio" || item?.status === "bloqueado";
 }
 
 function renderChip(item) {
@@ -507,7 +541,7 @@ function renderChip(item) {
     const title = reason ? ` title="${escapeHtml(reason)}"` : "";
     const hiddenByFilter = !matchesCurrentFilters(item);
     return `
-      <div class="chip bloqueado${hiddenByFilter ? " is-hidden-by-filter" : ""}"${title}>
+      <div class="chip bloqueado${hiddenByFilter ? " is-hidden-by-filter" : ""}"${title} tabindex="-1">
         <div class="chip-actions">
           <span></span>
           <button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>
@@ -535,7 +569,7 @@ function renderChip(item) {
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
   return `
-    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}"${confirmationTitle}>
+    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}"${confirmationTitle} tabindex="-1">
       <div class="chip-actions">
         <button class="chip-select-button${selected ? " is-selected" : ""}${canSendConfirmation ? "" : " is-disabled"}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>
         ${deleteButton}
@@ -1101,6 +1135,42 @@ async function refreshDashboard(options = {}) {
 }
 
 async function handleCalendarGridClick(event) {
+  const expandButton = event.target.closest(".cell-expand-button");
+  if (expandButton) {
+    const cell = expandButton.closest(".calendar-cell");
+    const overflow = cell?.querySelector(".calendar-cell-overflow");
+    if (!cell || !overflow) {
+      return;
+    }
+    const cellKey = expandButton.dataset.cellKey || cell.dataset.cellKey || "";
+    const isExpanded = !overflow.hasAttribute("hidden");
+    if (isExpanded) {
+      overflow.setAttribute("hidden", "");
+      cell.classList.remove("is-expanded");
+      expandButton.setAttribute("aria-expanded", "false");
+      if (cellKey) {
+        state.expandedCalendarCells.delete(cellKey);
+      }
+      expandButton.textContent = expandButton.dataset.collapsedLabel || expandButton.textContent;
+      const firstChip = cell.querySelector(".chip");
+      if (firstChip && typeof firstChip.focus === "function") {
+        firstChip.focus();
+      }
+    } else {
+      if (!expandButton.dataset.collapsedLabel) {
+        expandButton.dataset.collapsedLabel = expandButton.textContent;
+      }
+      overflow.removeAttribute("hidden");
+      cell.classList.add("is-expanded");
+      expandButton.setAttribute("aria-expanded", "true");
+      expandButton.textContent = "Recolher";
+      if (cellKey) {
+        state.expandedCalendarCells.add(cellKey);
+      }
+    }
+    return;
+  }
+
   const unblockButton = event.target.closest(".chip-unblock-button");
   if (unblockButton) {
     const id = unblockButton.dataset.blockId || "";
