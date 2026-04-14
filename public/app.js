@@ -370,6 +370,10 @@ function setSlotConflictStatus(message = "", tone = "") {
   elements.slotConflictHint.className = `field-hint${tone ? ` ${tone}` : ""}`;
 }
 
+function isBlockedItem(item) {
+  return item?.origem === "bloqueio" || item?.status === "bloqueado";
+}
+
 function setScheduleFormInvalidState(isInvalid) {
   const inputs = [
     elements.scheduleForm?.elements?.rota,
@@ -440,7 +444,7 @@ function findLocalSlotConflicts(context) {
 }
 
 function summarizeConflicts(items) {
-  const blocked = (item) => item?.origem === "bloqueio" || item?.status === "bloqueado";
+  const blocked = (item) => isBlockedItem(item);
   return (items || [])
     .filter((item) => !blocked(item))
     .slice(0, 2)
@@ -457,11 +461,10 @@ function applySlotConflictUi(conflicts, context) {
   if (conflicts && conflicts.length) {
     state.slotConflictActive = true;
     const rotaLabel = context?.rota ? ` em ${context.rota}` : "";
+    const isBlocked = isBlockedItem(conflicts[0]);
     const summary = summarizeConflicts(conflicts);
-    setSlotConflictStatus(
-      `Horario ocupado${rotaLabel}${summary ? `: ${summary}.` : "."}`,
-      "error"
-    );
+    const label = isBlocked ? "Horario bloqueado" : "Horario ocupado";
+    setSlotConflictStatus(`${label}${rotaLabel}${summary ? `: ${summary}.` : "."}`, "error");
     setScheduleFormInvalidState(true);
   } else {
     state.slotConflictActive = false;
@@ -488,7 +491,75 @@ function updateSlotConflictFromForm() {
     updateScheduleSubmitButtonState();
     return;
   }
-  applySlotConflictUi(conflicts, context);
+  const blocking = (conflicts || []).filter((item) => isBlockedItem(item));
+  applySlotConflictUi(blocking, context);
+}
+
+function findLocalPeriodScheduleConflicts({ rota, data, periodo, ignoreId = "", ignoreOsId = "", ignoreProtocolo = "" }) {
+  if (!rota || !data || !periodo || !state.data?.grid?.cells) {
+    return { conflicts: [], checked: false };
+  }
+  const rotaKey = normalizePopKey(rota);
+  const dayCells = state.data.grid.cells[data];
+  if (!dayCells) {
+    return { conflicts: [], checked: false };
+  }
+
+  const conflicts = [];
+  const slots = Object.keys(dayCells);
+  for (const slot of slots) {
+    const hour = Number(String(slot).slice(0, 2));
+    if (!Number.isFinite(hour)) continue;
+    const inPeriod = periodo === "manha" ? hour < 12 : hour >= 12;
+    if (!inPeriod) continue;
+    const items = dayCells[slot] || [];
+    for (const item of items) {
+      if (isBlockedItem(item)) continue;
+      if (ignoreId && String(item.id || "").trim() === String(ignoreId || "").trim()) continue;
+      if (ignoreOsId && String(item.osId || "").trim() === String(ignoreOsId || "").trim()) continue;
+      if (ignoreProtocolo && String(item.protocolo || "").trim() === String(ignoreProtocolo || "").trim()) continue;
+      if (normalizePopKey(item.rota) !== rotaKey) continue;
+      conflicts.push(item);
+    }
+  }
+  return { conflicts, checked: true };
+}
+
+function maybeWarnPeriodConflictsForScheduleForm() {
+  const form = elements.scheduleForm?.elements;
+  if (!form) return;
+  const rota = String(form.rota?.value || "").trim();
+  const data = String(form.data?.value || "").trim();
+  const contrato = String(form.contrato?.value || "").trim();
+  const periodo = getFormTurno(elements.scheduleForm);
+  if (!rota || !data || !periodo || !contrato) return;
+
+  const context = getScheduleFormConflictContext() || {};
+  const { conflicts, checked } = findLocalPeriodScheduleConflicts({
+    rota,
+    data,
+    periodo,
+    ignoreId: context.ignoreId,
+    ignoreOsId: context.ignoreOsId,
+    ignoreProtocolo: context.ignoreProtocolo
+  });
+  if (!checked || !conflicts.length) return;
+
+  const differentContract = conflicts.filter((item) => {
+    const existing = String(item.contrato || "").trim();
+    return existing && existing !== contrato;
+  });
+  if (!differentContract.length) {
+    return;
+  }
+
+  const periodoLabel = periodo === "manha" ? "manhã" : "tarde";
+  const uniqueContracts = Array.from(
+    new Set(differentContract.map((item) => String(item.contrato || "").trim()).filter(Boolean))
+  ).slice(0, 5);
+  alert(
+    `Aviso: já existem agendamentos no POP ${rota} em ${data} no período da ${periodoLabel} para outros contratos: ${uniqueContracts.join(", ")}.`
+  );
 }
 
 function badgeClassForSource(sourceMode) {
@@ -1381,6 +1452,7 @@ async function submitSchedule(event) {
     alert("Horario ocupado ou nao validado. Ajuste POP/Data/Horario para continuar.");
     return;
   }
+  maybeWarnPeriodConflictsForScheduleForm();
   const formData = new FormData(elements.scheduleForm);
   const payload = Object.fromEntries(formData.entries());
   const editing = isEditingSchedule();

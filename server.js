@@ -2487,7 +2487,7 @@ async function removeBlockedSlot(payload) {
 async function findPopSlotConflicts(
   config,
   { rota, data, horario },
-  { ignoreId = "", ignoreOsId = "", ignoreProtocolo = "", includeBlocks = true } = {}
+  { ignoreId = "", ignoreOsId = "", ignoreProtocolo = "", includeBlocks = true, includeSchedules = true } = {}
 ) {
   const rotaKey = normalizePopKey(rota);
   const dateKey = isoDateOnly(data);
@@ -2506,21 +2506,23 @@ async function findPopSlotConflicts(
   const schedules = [];
   let checkedSgp = false;
 
-  try {
-    const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey });
-    checkedSgp = true;
-    schedules.push(
-      ...sgpRows
-        .filter((item) => isExternalServiceOrder(item))
-        .filter((item) => isOpenServiceOrder(item))
-        .map((item) => normalizeSchedule(config, item, "sgp"))
-        .filter((item) => item.data && item.horario && item.horario !== "A definir")
-    );
-  } catch (error) {
-    checkedSgp = false;
-  }
+  if (includeSchedules) {
+    try {
+      const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey });
+      checkedSgp = true;
+      schedules.push(
+        ...sgpRows
+          .filter((item) => isExternalServiceOrder(item))
+          .filter((item) => isOpenServiceOrder(item))
+          .map((item) => normalizeSchedule(config, item, "sgp"))
+          .filter((item) => item.data && item.horario && item.horario !== "A definir")
+      );
+    } catch (error) {
+      checkedSgp = false;
+    }
 
-  schedules.push(...readManualSchedules().map(normalizeManualSchedule).filter((item) => item.data));
+    schedules.push(...readManualSchedules().map(normalizeManualSchedule).filter((item) => item.data));
+  }
   const blocked = includeBlocks ? readBlockedSlots() : [];
 
   const conflicts = schedules.filter((item) => {
@@ -2579,7 +2581,7 @@ async function createSchedule(payload) {
     };
   }
 
-  const conflictCheck = await findPopSlotConflicts(config, entry);
+  const conflictCheck = await findPopSlotConflicts(config, entry, { includeSchedules: false, includeBlocks: true });
   if (conflictCheck.conflicts.length) {
     const rotaLabel = String(entry.rota || "").trim() || "POP";
     const summary = summarizeConflictItems(conflictCheck.conflicts);
@@ -2746,7 +2748,9 @@ async function updateSchedule(payload) {
   const conflictCheck = await findPopSlotConflicts(config, entry, {
     ignoreId: id,
     ignoreOsId: osId,
-    ignoreProtocolo: String(payload.protocolo || "").trim()
+    ignoreProtocolo: String(payload.protocolo || "").trim(),
+    includeSchedules: false,
+    includeBlocks: true
   });
   if (conflictCheck.conflicts.length) {
     const rotaLabel = String(entry.rota || "").trim() || "POP";
