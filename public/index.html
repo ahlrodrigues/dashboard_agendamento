@@ -311,8 +311,8 @@
     </main>
   </div>
 
-  <dialog id="scheduleModal" class="modal">
-    <div class="modal-content">
+	  <dialog id="scheduleModal" class="modal">
+	    <div class="modal-content">
       <header class="modal-header">
         <h2 id="modalTitle">Detalhes do Agendamento</h2>
         <button id="closeModalBtn" class="ghost-button" aria-label="Fechar" type="button">X</button>
@@ -406,7 +406,22 @@
         </section>
       </div>
     </div>
-  </dialog>
-</body>
+	  </dialog>
 
-</html>
+	  <div id="periodConflictModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="periodConflictTitle">
+	    <div class="modal-content">
+	      <header class="modal-header">
+	        <h2 id="periodConflictTitle">Conflito de agendamento</h2>
+	      </header>
+	      <div class="modal-body">
+	        <p id="periodConflictMessage" class="muted"></p>
+	      </div>
+	      <footer class="modal-footer">
+	        <button id="periodConflictCancelButton" class="ghost-button" type="button">Cancelar</button>
+	        <button id="periodConflictProceedButton" class="primary-button" type="button">Prosseguir</button>
+	      </footer>
+	    </div>
+	  </div>
+	</body>
+	
+	</html>

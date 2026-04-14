@@ -781,6 +781,18 @@ body.dark .cell-expand-button {
   transition: transform 0.18s ease, box-shadow 0.18s ease, outline-color 0.18s ease;
 }
 
+.chip.is-duplicate-period::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--red);
+  border-radius: 12px 0 0 12px;
+  pointer-events: none;
+}
+
 .chip.is-selected {
   outline: 3px solid rgba(255, 255, 255, 0.98);
   outline-offset: -2px;
@@ -1049,6 +1061,10 @@ th {
 
 tbody tr:hover {
   background: rgba(216, 232, 255, 0.28);
+}
+
+.schedule-row.is-duplicate-period td:first-child {
+  border-left: 6px solid var(--red);
 }
 
 body.dark .calendar-head,

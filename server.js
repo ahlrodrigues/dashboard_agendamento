@@ -14,6 +14,7 @@ const PACKAGE_PATH = path.join(BASE_DIR, "package.json");
 const MANUAL_SCHEDULES_PATH = path.join(DATA_DIR, "manual-agendamentos.json");
 const BLOCKED_SLOTS_PATH = path.join(DATA_DIR, "blocked-slots.json");
 const CONFIRMATION_DISPATCH_LOG_PATH = path.join(DATA_DIR, "confirmation-dispatch-log.json");
+const SCHEDULE_FLAGS_PATH = path.join(DATA_DIR, "schedule-flags.json");
 
 const DEFAULT_STATUSES = [0, 1];
 const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
@@ -57,6 +58,9 @@ function ensureDataDir() {
   if (!fs.existsSync(CONFIRMATION_DISPATCH_LOG_PATH)) {
     fs.writeFileSync(CONFIRMATION_DISPATCH_LOG_PATH, "{}\n", "utf8");
   }
+  if (!fs.existsSync(SCHEDULE_FLAGS_PATH)) {
+    fs.writeFileSync(SCHEDULE_FLAGS_PATH, "{}\n", "utf8");
+  }
 }
 
 function readJson(filePath, fallback = null) {
@@ -69,6 +73,70 @@ function readJson(filePath, fallback = null) {
 
 function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+}
+
+function readScheduleFlags() {
+  ensureDataDir();
+  const data = readJson(SCHEDULE_FLAGS_PATH, {});
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {};
+  }
+  return data;
+}
+
+function writeScheduleFlags(data) {
+  writeJson(SCHEDULE_FLAGS_PATH, data && typeof data === "object" && !Array.isArray(data) ? data : {});
+}
+
+function truthyFlag(value) {
+  if (value === true || value === 1) return true;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "sim";
+}
+
+function setDuplicatePeriodFlag({ osId = "", protocolo = "", id = "" }) {
+  const flags = readScheduleFlags();
+  const now = new Date().toISOString();
+  const keys = [];
+  const osKey = String(osId || "").trim();
+  const protoKey = String(protocolo || "").trim();
+  const idKey = String(id || "").trim();
+  if (osKey) keys.push(`os:${osKey}`);
+  if (protoKey) keys.push(`protocolo:${protoKey}`);
+  if (idKey) keys.push(`id:${idKey}`);
+  if (!keys.length) return false;
+
+  for (const key of keys) {
+    flags[key] = {
+      ...(flags[key] || {}),
+      duplicatePeriod: true,
+      updated_at: now
+    };
+  }
+  writeScheduleFlags(flags);
+  return true;
+}
+
+function applyScheduleFlags(schedules) {
+  const flags = readScheduleFlags();
+  for (const item of schedules || []) {
+    if (!item || item.origem === "bloqueio" || item.status === "bloqueado") {
+      continue;
+    }
+    if (item.duplicatePeriod) {
+      continue;
+    }
+    const osKey = String(item.osId || "").trim();
+    const protoKey = String(item.protocolo || "").trim();
+    const idKey = String(item.id || "").trim();
+    const hit =
+      (osKey && flags[`os:${osKey}`]?.duplicatePeriod) ||
+      (protoKey && flags[`protocolo:${protoKey}`]?.duplicatePeriod) ||
+      (idKey && flags[`id:${idKey}`]?.duplicatePeriod);
+    if (hit) {
+      item.duplicatePeriod = true;
+    }
+  }
 }
 
 function readBlockedSlots() {
@@ -1767,6 +1835,7 @@ function normalizeManualSchedule(entry) {
     motivo: String(entry.motivo || "").trim(),
     sgpStatus: "",
     observacao: entry.justificativa || entry.observacao || "",
+    duplicatePeriod: Boolean(entry.duplicatePeriod),
     origem: "pre_agendamento_local",
     raw: entry
   };
@@ -2023,6 +2092,7 @@ function serializeSchedule(item) {
     motivo: item.motivo || "",
     sgpStatus: item.sgpStatus || "",
     observacao: item.observacao,
+    duplicatePeriod: Boolean(item.duplicatePeriod),
     origem: item.origem
   };
 }
@@ -2148,6 +2218,8 @@ async function getDashboardData(query, authUser = null) {
     }
   }
   schedules = schedules.concat(blockedExpanded);
+
+  applyScheduleFlags(schedules);
 
   schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
@@ -2558,6 +2630,7 @@ async function findPopSlotConflicts(
 
 async function createSchedule(payload) {
   const config = loadConfig();
+  const duplicatePeriod = truthyFlag(payload?.duplicatePeriod);
   const entry = {
     cliente: String(payload.cliente || "").trim(),
     contrato: String(payload.contrato || "").trim(),
@@ -2568,7 +2641,8 @@ async function createSchedule(payload) {
     data: isoDateOnly(payload.data),
     horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
-    justificativa: String(payload.justificativa || payload.observacao || "").trim()
+    justificativa: String(payload.justificativa || payload.observacao || "").trim(),
+    duplicatePeriod
   };
 
   if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
@@ -2613,6 +2687,10 @@ async function createSchedule(payload) {
         confirmationSent: false
       };
       let autoQueued = false;
+
+      if (entry.duplicatePeriod) {
+        setDuplicatePeriodFlag({ osId: createdOsId, protocolo: entry.protocolo });
+      }
 
       if (createdOsId) {
         try {
@@ -2695,6 +2773,9 @@ async function createSchedule(payload) {
     status: "pre_agendado",
     created_at: new Date().toISOString()
   });
+  if (entry.duplicatePeriod) {
+    setDuplicatePeriodFlag({ id: saved.id, protocolo: entry.protocolo });
+  }
 
   return {
     statusCode: 201,

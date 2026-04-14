@@ -84,15 +84,54 @@ const elements = {
   scheduleTurnoGroup: document.querySelector("#scheduleTurnoGroup"),
   scheduleTurnoManha: document.querySelector("#scheduleTurnoManha"),
   scheduleTurnoTarde: document.querySelector("#scheduleTurnoTarde"),
-  editTurnoGroup: document.querySelector("#editTurnoGroup"),
-  editTurnoManha: document.querySelector("#editTurnoManha"),
-  editTurnoTarde: document.querySelector("#editTurnoTarde")
-};
+	  editTurnoGroup: document.querySelector("#editTurnoGroup"),
+	  editTurnoManha: document.querySelector("#editTurnoManha"),
+	  editTurnoTarde: document.querySelector("#editTurnoTarde"),
+	  periodConflictModal: document.querySelector("#periodConflictModal"),
+	  periodConflictMessage: document.querySelector("#periodConflictMessage"),
+	  periodConflictCancelButton: document.querySelector("#periodConflictCancelButton"),
+	  periodConflictProceedButton: document.querySelector("#periodConflictProceedButton")
+	};
 
 const TURNOS = {
   manha: { time: "08:00" },
   tarde: { time: "13:00" }
 };
+
+let periodConflictModalResolver = null;
+
+function closePeriodConflictModal(shouldProceed) {
+  if (!elements.periodConflictModal) {
+    return;
+  }
+  elements.periodConflictModal.classList.remove("active");
+  const resolve = periodConflictModalResolver;
+  periodConflictModalResolver = null;
+  if (typeof resolve === "function") {
+    resolve(Boolean(shouldProceed));
+  }
+}
+
+function showPeriodConflictModal(message) {
+  if (!elements.periodConflictModal || !elements.periodConflictMessage) {
+    alert(message);
+    return Promise.resolve(true);
+  }
+
+  if (typeof periodConflictModalResolver === "function") {
+    periodConflictModalResolver(false);
+  }
+  periodConflictModalResolver = null;
+
+  elements.periodConflictMessage.textContent = String(message || "");
+  return new Promise((resolve) => {
+    periodConflictModalResolver = resolve;
+    elements.periodConflictModal.classList.add("active");
+    if (elements.periodConflictProceedButton) {
+      elements.periodConflictProceedButton.focus();
+    }
+  });
+}
 
 function getAuthToken() {
   return localStorage.getItem("dashboard_token");
@@ -525,14 +564,14 @@ function findLocalPeriodScheduleConflicts({ rota, data, periodo, ignoreId = "", 
   return { conflicts, checked: true };
 }
 
-function maybeWarnPeriodConflictsForScheduleForm() {
+async function maybeWarnPeriodConflictsForScheduleForm() {
   const form = elements.scheduleForm?.elements;
-  if (!form) return;
+  if (!form) return { shouldProceed: true, duplicatePeriod: false };
   const rota = String(form.rota?.value || "").trim();
   const data = String(form.data?.value || "").trim();
   const contrato = String(form.contrato?.value || "").trim();
   const periodo = getFormTurno(elements.scheduleForm);
-  if (!rota || !data || !periodo || !contrato) return;
+  if (!rota || !data || !periodo || !contrato) return { shouldProceed: true, duplicatePeriod: false };
 
   const context = getScheduleFormConflictContext() || {};
   const { conflicts, checked } = findLocalPeriodScheduleConflicts({
@@ -543,23 +582,27 @@ function maybeWarnPeriodConflictsForScheduleForm() {
     ignoreOsId: context.ignoreOsId,
     ignoreProtocolo: context.ignoreProtocolo
   });
-  if (!checked || !conflicts.length) return;
+  if (!checked || !conflicts.length) return { shouldProceed: true, duplicatePeriod: false };
 
   const differentContract = conflicts.filter((item) => {
     const existing = String(item.contrato || "").trim();
     return existing && existing !== contrato;
   });
   if (!differentContract.length) {
-    return;
+    return { shouldProceed: true, duplicatePeriod: false };
   }
 
   const periodoLabel = periodo === "manha" ? "manhã" : "tarde";
   const uniqueContracts = Array.from(
     new Set(differentContract.map((item) => String(item.contrato || "").trim()).filter(Boolean))
   ).slice(0, 5);
-  alert(
-    `Aviso: já existem agendamentos no POP ${rota} em ${data} no período da ${periodoLabel} para outros contratos: ${uniqueContracts.join(", ")}.`
-  );
+
+  const message = `Aviso: já existem agendamentos no POP ${rota} em ${data} no período da ${periodoLabel} para outros contratos: ${uniqueContracts.join(
+    ", "
+  )}.`;
+
+  const shouldProceed = await showPeriodConflictModal(message);
+  return { shouldProceed, duplicatePeriod: shouldProceed };
 }
 
 function badgeClassForSource(sourceMode) {
@@ -708,6 +751,7 @@ function renderChip(item) {
   const selected = state.selectedScheduleIds.has(item.id);
   const canSendConfirmation = canRequestConfirmation(item);
   const hiddenByFilter = !matchesCurrentFilters(item);
+  const duplicatePeriodClass = item.duplicatePeriod ? " is-duplicate-period" : "";
   const selectTitle = canSendConfirmation
     ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
     : "OS indisponivel para envio";
@@ -715,7 +759,7 @@ function renderChip(item) {
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
   return `
-    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}"${confirmationTitle} tabindex="-1">
+    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}${duplicatePeriodClass}"${confirmationTitle} tabindex="-1">
       <div class="chip-actions">
         <button class="chip-select-button${selected ? " is-selected" : ""}${canSendConfirmation ? "" : " is-disabled"}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>
         ${deleteButton}
@@ -1143,7 +1187,7 @@ function renderTable(rows) {
   elements.scheduleTableBody.innerHTML = rows
     .map(
       (item) => `
-        <tr>
+        <tr class="schedule-row${item.duplicatePeriod ? " is-duplicate-period" : ""}">
           <td>${formatDate(item.data)}</td>
           <td>${item.horario || "-"}</td>
           <td>
@@ -1452,9 +1496,15 @@ async function submitSchedule(event) {
     alert("Horario ocupado ou nao validado. Ajuste POP/Data/Horario para continuar.");
     return;
   }
-  maybeWarnPeriodConflictsForScheduleForm();
+  const periodDecision = await maybeWarnPeriodConflictsForScheduleForm();
+  if (!periodDecision.shouldProceed) {
+    return;
+  }
   const formData = new FormData(elements.scheduleForm);
   const payload = Object.fromEntries(formData.entries());
+  if (periodDecision.duplicatePeriod) {
+    payload.duplicatePeriod = true;
+  }
   const editing = isEditingSchedule();
   const endpoint = editing ? "/api/agendamentos/edit" : "/api/agendamentos";
   const button = elements.scheduleSubmitButton || elements.scheduleForm.querySelector("button[type=submit]");
@@ -1886,6 +1936,26 @@ function wireEvents() {
 
   if (elements.closeModalBtn) {
     elements.closeModalBtn.addEventListener("click", () => elements.scheduleModal.close());
+  }
+
+  if (elements.periodConflictCancelButton) {
+    elements.periodConflictCancelButton.addEventListener("click", () => closePeriodConflictModal(false));
+  }
+  if (elements.periodConflictProceedButton) {
+    elements.periodConflictProceedButton.addEventListener("click", () => closePeriodConflictModal(true));
+  }
+  if (elements.periodConflictModal) {
+    elements.periodConflictModal.addEventListener("click", (event) => {
+      if (event.target === elements.periodConflictModal) {
+        closePeriodConflictModal(false);
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (elements.periodConflictModal.classList.contains("active")) {
+        closePeriodConflictModal(false);
+      }
+    });
   }
 
   if (elements.tabButtons) {
