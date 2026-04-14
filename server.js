@@ -1746,7 +1746,6 @@ function isExternalServiceOrder(raw) {
 }
 
 function isOpenServiceOrder(raw) {
-  const statusId = String(raw?.status_id ?? "").trim();
   const statusText = String(
     raw?.status_descricao ||
       raw?.status_nome ||
@@ -1756,14 +1755,10 @@ function isOpenServiceOrder(raw) {
     ""
   ).trim().toLowerCase();
 
-  // Dashboard: considerar OS ativas (abertas ou pendentes).
-  // Observacao: o SGP costuma expor status_id 0=aberta e 1=pendente (podendo variar por instancia).
-  if (statusId === "0" || statusId === "1") {
-    return true;
-  }
-  if (statusText === "aberta" || statusText === "pendente") {
-    return true;
-  }
+  // Dashboard: considerar apenas OS ativas (abertas ou pendentes).
+  // Importante: os IDs de status do SGP variam por instância; aqui a regra é pelo texto.
+  if (!statusText) return false;
+  if (statusText === "aberta" || statusText === "pendente") return true;
   return statusText.includes("aberta") || statusText.includes("pendent");
 }
 
@@ -3772,7 +3767,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     if (!contractRows.length) return [];
 
     const uniqueRows = dedupeBy(
-      contractRows.filter((row) => isExternalServiceOrder(row)),
+      contractRows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row)),
       (row) => String(row.id || row.os_id || "")
     );
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));

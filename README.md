@@ -57,7 +57,7 @@ Exemplo:
   "agendamento": {
     "endpoint_lista": "/api/ura/ordemservico/list/",
     "endpoint_agendar": "",
-    "statuses_consulta": [0, 1],
+    "statuses_consulta": [0, 3],
     "permite_pre_agendamento_local": true
   }
 }
@@ -67,6 +67,7 @@ Observacao:
 
 - o projeto pode continuar usando `basic_auth` para leitura normal
 - para alterar data/horario de OS aberta no SGP, preencha tambem `app_token_auth.app` e `app_token_auth.token`
+- os IDs em `agendamento.statuses_consulta` variam por instância do SGP (ex.: aqui `0=Aberta` e `3=Pendente`). Se aparecer “Encerrada” no calendário, revise essa lista.
 - ao agendar com data+horario+tecnico, o backend pode forcar a prioridade da OS para alta usando `agendamento.prioridade_os_ao_agendar` (padrao `1`). Para desativar, defina `0`.
 - confirmacao automatica (SMS): so e solicitada quando a OS tiver **data de agendamento** e **tecnico** preenchidos. OS com data mas sem tecnico nao disparam confirmacao (e o botao “Enviar confirmacao” ignora esses itens).
 
