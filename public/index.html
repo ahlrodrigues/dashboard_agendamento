@@ -151,18 +151,30 @@
             <input name="tecnico" type="text" />
           </label>
 
-          <div class="field-row">
-            <label class="field">
-              <span>Data</span>
-              <input name="data" type="date" required />
-            </label>
+	          <div class="field-row">
+	            <label class="field">
+	              <span>Data</span>
+	              <input name="data" type="date" required />
+	            </label>
 
-            <label class="field">
-              <span>Horario</span>
-              <input name="horario" type="time" step="1" required />
-              <small id="slotConflictHint" class="field-hint" aria-live="polite"></small>
-            </label>
-          </div>
+	            <label class="field">
+	              <span>Horario</span>
+	              <input name="horario" id="scheduleHorario" type="hidden" />
+	              <div id="scheduleTurnoGroup" class="toggle-group" role="group" aria-label="Turno do agendamento">
+	                <label class="toggle-button">
+	                  <input id="scheduleTurnoManha" type="checkbox" data-turno="manha" autocomplete="off" />
+	                  <span>Manhã</span>
+	                  <small>08:00</small>
+	                </label>
+	                <label class="toggle-button">
+	                  <input id="scheduleTurnoTarde" type="checkbox" data-turno="tarde" autocomplete="off" />
+	                  <span>Tarde</span>
+	                  <small>13:00</small>
+	                </label>
+	              </div>
+	              <small id="slotConflictHint" class="field-hint" aria-live="polite"></small>
+	            </label>
+	          </div>
 
           <label class="field">
             <span>Endereco</span>
@@ -340,16 +352,28 @@
               </label>
             </div>
 
-            <div class="field-row">
-              <label class="field">
-                <span>Data Agendamento</span>
-                <input name="data" id="editData" type="date" required />
-              </label>
-	              <label class="field">
-	                <span>Horário Problema Reportado</span>
-	                <input name="horario" id="editHorario" type="time" step="1" />
-	              </label>
-	            </div>
+		            <div class="field-row">
+		              <label class="field">
+		                <span>Data Agendamento</span>
+		                <input name="data" id="editData" type="date" required />
+		              </label>
+		              <label class="field">
+		                <span>Horário</span>
+		                <input name="horario" id="editHorario" type="hidden" />
+		                <div id="editTurnoGroup" class="toggle-group" role="group" aria-label="Turno do agendamento">
+		                  <label class="toggle-button">
+		                    <input id="editTurnoManha" type="checkbox" data-turno="manha" autocomplete="off" />
+		                    <span>Manhã</span>
+		                    <small>08:00</small>
+		                  </label>
+		                  <label class="toggle-button">
+		                    <input id="editTurnoTarde" type="checkbox" data-turno="tarde" autocomplete="off" />
+		                    <span>Tarde</span>
+		                    <small>13:00</small>
+		                  </label>
+		                </div>
+		              </label>
+		            </div>
 
 	            <label class="field">
 	              <span>Justificativa (Observação interna)</span>

@@ -80,7 +80,18 @@ const elements = {
   logoutButton: document.querySelector("#logoutButton"),
   userBadge: document.querySelector("#userBadge"),
   toggleCompactView: document.querySelector("#toggleCompactView"),
-  toggleDarkMode: document.querySelector("#toggleDarkMode")
+  toggleDarkMode: document.querySelector("#toggleDarkMode"),
+  scheduleTurnoGroup: document.querySelector("#scheduleTurnoGroup"),
+  scheduleTurnoManha: document.querySelector("#scheduleTurnoManha"),
+  scheduleTurnoTarde: document.querySelector("#scheduleTurnoTarde"),
+  editTurnoGroup: document.querySelector("#editTurnoGroup"),
+  editTurnoManha: document.querySelector("#editTurnoManha"),
+  editTurnoTarde: document.querySelector("#editTurnoTarde")
+};
+
+const TURNOS = {
+  manha: { time: "08:00" },
+  tarde: { time: "13:00" }
 };
 
 function getAuthToken() {
@@ -268,6 +279,65 @@ function hhmm(value) {
   return match ? `${match[1]}:${match[2]}` : "";
 }
 
+function inferTurnoFromTime(value) {
+  const time = hhmm(value);
+  if (!time) return "";
+  const hour = Number(time.slice(0, 2));
+  if (!Number.isFinite(hour)) return "";
+  return hour < 12 ? "manha" : "tarde";
+}
+
+function setToggleSelected(input, selected) {
+  const wrapper = input?.closest?.(".toggle-button");
+  if (wrapper) {
+    wrapper.classList.toggle("is-selected", Boolean(selected));
+  }
+}
+
+function setFormTurno(formElement, turno) {
+  const form = formElement?.elements;
+  if (!form) return;
+  const normalized = turno === "manha" || turno === "tarde" ? turno : "";
+  const desiredTime = normalized ? TURNOS[normalized].time : "";
+
+  const turnInputs = formElement.querySelectorAll('input[type="checkbox"][data-turno]');
+  turnInputs.forEach((input) => {
+    const isSelected = normalized && input.dataset.turno === normalized;
+    input.checked = Boolean(isSelected);
+    setToggleSelected(input, isSelected);
+  });
+
+  if (form.horario) {
+    form.horario.value = desiredTime;
+  }
+}
+
+function getFormTurno(formElement) {
+  const inputs = formElement?.querySelectorAll?.('input[type="checkbox"][data-turno]');
+  if (!inputs) return "";
+  for (const input of inputs) {
+    if (input.checked) {
+      return input.dataset.turno === "tarde" ? "tarde" : "manha";
+    }
+  }
+  return "";
+}
+
+function wireTurnoGroup(formElement, onChange) {
+  const inputs = formElement?.querySelectorAll?.('input[type="checkbox"][data-turno]');
+  if (!inputs || !inputs.length) return;
+  inputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      const turno = input.checked ? (input.dataset.turno === "tarde" ? "tarde" : "manha") : "";
+      setFormTurno(formElement, turno);
+      if (typeof onChange === "function") {
+        onChange(turno);
+      }
+    });
+    setToggleSelected(input, input.checked);
+  });
+}
+
 function normalizePopKey(value) {
   return String(value || "")
     .trim()
@@ -308,6 +378,9 @@ function setScheduleFormInvalidState(isInvalid) {
   ].filter(Boolean);
   for (const input of inputs) {
     input.classList.toggle("is-invalid", Boolean(isInvalid));
+  }
+  if (elements.scheduleTurnoGroup) {
+    elements.scheduleTurnoGroup.classList.toggle("is-invalid", Boolean(isInvalid));
   }
 }
 
@@ -945,7 +1018,7 @@ function fillScheduleFormFromSchedule(item) {
   form.rota.value = item.rota || "";
   form.tecnico.value = getDisplayTechnicianName(item.tecnico);
   form.data.value = item.data || "";
-  form.horario.value = formatTimeForInput(item.horario);
+  setFormTurno(elements.scheduleForm, inferTurnoFromTime(item.horario));
   form.endereco.value = item.endereco || "";
   form.observacao.value = item.observacao || "";
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
@@ -962,6 +1035,7 @@ function resetScheduleForm() {
   elements.scheduleForm.elements.osId.value = "";
   elements.scheduleForm.elements.origem.value = "";
   elements.scheduleForm.elements.data.value = elements.startDateFilter.value || today;
+  setFormTurno(elements.scheduleForm, "");
   resetContractLookupState();
   setScheduleFormMode("create");
   applySlotConflictUi([], getScheduleFormConflictContext());
@@ -1240,6 +1314,10 @@ async function handleCalendarGridClick(event) {
 
 async function submitEditSchedule(event) {
   event.preventDefault();
+  if (!String(elements.editScheduleForm.elements.horario?.value || "").trim()) {
+    alert("Selecione Manhã ou Tarde para definir o horário.");
+    return;
+  }
   const formData = new FormData(elements.editScheduleForm);
   const payload = Object.fromEntries(formData.entries());
   const btn = elements.editScheduleForm.querySelector("button[type=submit]");
@@ -1294,6 +1372,10 @@ async function submitCancelSchedule(event) {
 
 async function submitSchedule(event) {
   event.preventDefault();
+  if (!String(elements.scheduleForm.elements.horario?.value || "").trim()) {
+    alert("Selecione Manhã ou Tarde para definir o horário.");
+    return;
+  }
   updateSlotConflictFromForm();
   if (state.slotConflictActive) {
     alert("Horario ocupado ou nao validado. Ajuste POP/Data/Horario para continuar.");
@@ -1591,11 +1673,11 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 
         // Horário do agendamento; se não existir, usa a hora de abertura como fallback visual
         if (f.horario) {
-          if (os.hora_agendamento && os.hora_agendamento !== "00:00:00") {
-            f.horario.value = formatTimeForInput(os.hora_agendamento);
-          } else if (os.hora_abertura) {
-            f.horario.value = formatTimeForInput(os.hora_abertura);
-          }
+          const referenceTime =
+            os.hora_agendamento && os.hora_agendamento !== "00:00:00"
+              ? os.hora_agendamento
+              : os.hora_abertura || "";
+          setFormTurno(elements.scheduleForm, inferTurnoFromTime(referenceTime));
         }
 
         // Observação → apenas o descritivo da OS (limpo)
@@ -1712,10 +1794,7 @@ function wireEvents() {
   if (elements.scheduleForm?.elements?.data) {
     elements.scheduleForm.elements.data.addEventListener("change", debouncedConflictUpdate);
   }
-  if (elements.scheduleForm?.elements?.horario) {
-    elements.scheduleForm.elements.horario.addEventListener("input", debouncedConflictUpdate);
-    elements.scheduleForm.elements.horario.addEventListener("blur", updateSlotConflictFromForm);
-  }
+  wireTurnoGroup(elements.scheduleForm, () => debouncedConflictUpdate());
   elements.calendarGrid.addEventListener("click", handleCalendarGridClick);
   if (elements.sendConfirmationButton) {
     elements.sendConfirmationButton.addEventListener("click", sendSelectedConfirmations);
@@ -1750,6 +1829,7 @@ function wireEvents() {
 
   if (elements.editScheduleForm) {
     elements.editScheduleForm.addEventListener("submit", submitEditSchedule);
+    wireTurnoGroup(elements.editScheduleForm);
   }
   if (elements.cancelScheduleForm) {
     elements.cancelScheduleForm.addEventListener("submit", submitCancelSchedule);

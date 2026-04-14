@@ -1047,6 +1047,9 @@ async function processPendingConfirmationResends() {
       }
 
       const serviceOrder = await fetchServiceOrderById(config, osId).catch(() => null);
+      if (serviceOrder && !isExternalServiceOrder(serviceOrder)) {
+        continue;
+      }
       const scheduleDate = isoDateOnly(
         serviceOrder?.data_agendamento ||
         serviceOrder?.data_agendada ||
@@ -1441,6 +1444,17 @@ function hhmm(value) {
   return match ? `${match[1]}:${match[2]}` : "";
 }
 
+function normalizeScheduleTimeInput(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (text === "manha" || text === "manhã") {
+    return "08:00";
+  }
+  if (text === "tarde") {
+    return "13:00";
+  }
+  return hhmm(value);
+}
+
 function normalizeSlot(value) {
   const time = hhmm(value);
   if (!time || time === "00:00") {
@@ -1488,11 +1502,29 @@ function normalizeStatus(raw) {
   return "pre_agendado";
 }
 
+function normalizeOsType(raw) {
+  return String(
+    raw?.tipo ||
+      raw?.tipo_os ||
+      raw?.tipoOS ||
+      raw?.tipo_descricao ||
+      raw?.tipo_nome ||
+      ""
+  )
+    .trim()
+    .toUpperCase();
+}
+
+function isExternalServiceOrder(raw) {
+  // Regra do dashboard: considerar apenas OS do tipo EXTERNA (campo `tipo` retornado na lista do SGP).
+  return normalizeOsType(raw) === "EXTERNA";
+}
+
 function isOpenServiceOrder(raw) {
   const statusId = String(raw?.status_id ?? "").trim();
   const statusText = String(
     raw?.status_descricao ||
-    raw?.status_nome ||
+      raw?.status_nome ||
     raw?.status_label ||
     raw?.status ||
     raw?.situacao ||
@@ -2065,6 +2097,7 @@ async function getDashboardData(query, authUser = null) {
   try {
     const sgpRows = await listServiceOrders(config, { startDate, endDate });
     schedules = sgpRows
+      .filter((item) => isExternalServiceOrder(item))
       .filter((item) => isOpenServiceOrder(item))
       .map((item) => normalizeSchedule(config, item, "sgp"))
       .filter((item) => item.data);
@@ -2304,7 +2337,7 @@ function normalizePopKey(value) {
 }
 
 function normalizeConflictTime(value) {
-  return hhmm(value);
+  return normalizeScheduleTimeInput(value);
 }
 
 function compareTimes(a, b) {
@@ -2478,6 +2511,7 @@ async function findPopSlotConflicts(
     checkedSgp = true;
     schedules.push(
       ...sgpRows
+        .filter((item) => isExternalServiceOrder(item))
         .filter((item) => isOpenServiceOrder(item))
         .map((item) => normalizeSchedule(config, item, "sgp"))
         .filter((item) => item.data && item.horario && item.horario !== "A definir")
@@ -2530,7 +2564,7 @@ async function createSchedule(payload) {
     rota: String(payload.rota || "").trim(),
     tecnico: String(payload.tecnico || "").trim(),
     data: isoDateOnly(payload.data),
-    horario: hhmm(payload.horario),
+    horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
     justificativa: String(payload.justificativa || payload.observacao || "").trim()
   };
@@ -2684,7 +2718,7 @@ async function updateSchedule(payload) {
     rota: String(payload.rota || "").trim(),
     tecnico: String(payload.tecnico || "").trim(),
     data: isoDateOnly(payload.data),
-    horario: hhmm(payload.horario),
+    horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
     justificativa: String(payload.justificativa || payload.observacao || "").trim()
   };
@@ -2758,6 +2792,19 @@ async function updateSchedule(payload) {
         body: {
           ok: false,
           message: "OS do agendamento nao identificada para edicao no SGP."
+        }
+      };
+    }
+
+    const serviceOrder = await fetchServiceOrderById(config, osId).catch(() => null);
+    if (serviceOrder && !isExternalServiceOrder(serviceOrder)) {
+      return {
+        statusCode: 403,
+        body: {
+          ok: false,
+          mode: "sgp",
+          message: `A OS ${osId} nao e do tipo EXTERNA e nao pode ser agendada pelo dashboard.`,
+          tipo: normalizeOsType(serviceOrder)
         }
       };
     }
@@ -3382,7 +3429,10 @@ async function lookupOpenOsForContract(config, contractId) {
 
     if (!contractRows.length) return [];
 
-    const uniqueRows = dedupeBy(contractRows, row => String(row.id || row.os_id || ""));
+    const uniqueRows = dedupeBy(
+      contractRows.filter((row) => isExternalServiceOrder(row)),
+      (row) => String(row.id || row.os_id || "")
+    );
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
 
     return uniqueRows.slice(0, 3).map(raw => {
