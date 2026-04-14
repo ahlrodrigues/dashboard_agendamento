@@ -746,6 +746,7 @@ function renderChip(item) {
   const technicianLabel = technicianName ? `Tecnico: ${escapeHtml(technicianName)}` : "Tecnico:";
   const reasonLabel = `Motivo: ${escapeHtml(String(item.motivo || "").trim() || "-")}`;
   const sgpStatusLabel = `Status SGP: ${escapeHtml(String(item.sgpStatus || "").trim() || "-")}`;
+  const createdByLabel = item.createdBy ? `Criado por: ${escapeHtml(String(item.createdBy || "").trim())}` : "";
   const confirmationLabel = confirmationStatusLabel(item.confirmationStatus, item.confirmationSent);
   const confirmationTitle = item.confirmationTitle ? ` title="${escapeHtml(item.confirmationTitle)}"` : "";
   const selected = state.selectedScheduleIds.has(item.id);
@@ -765,7 +766,7 @@ function renderChip(item) {
         ${deleteButton}
       </div>
       <strong>${clientName}</strong>
-      <small>${routeLabel}<br />${technicianLabel}<br />${reasonLabel}<br />${sgpStatusLabel}<br />Confirmacao: ${confirmationLabel}</small>
+      <small>${routeLabel}<br />${technicianLabel}<br />${reasonLabel}<br />${sgpStatusLabel}${createdByLabel ? `<br />${createdByLabel}` : ""}<br />Confirmacao: ${confirmationLabel}</small>
       <span class="chip-flag">${canSendConfirmation ? `OS ${escapeHtml(item.osId || item.protocolo || "")}` : "Envio indisponivel"}</span>
     </div>
   `;
@@ -1192,7 +1193,7 @@ function renderTable(rows) {
           <td>${item.horario || "-"}</td>
           <td>
             <strong>${renderClientLink(item, item.cliente)}</strong><br />
-            <span class="muted">${item.protocolo || item.contrato || "-"}</span>
+            <span class="muted">${item.protocolo || item.contrato || "-"}${item.createdBy ? `<br />Por: ${escapeHtml(String(item.createdBy))}` : ""}</span>
           </td>
           <td>${item.rota || "-"}</td>
           <td>${item.tecnico || "-"}</td>
@@ -1435,6 +1436,12 @@ async function submitEditSchedule(event) {
   }
   const formData = new FormData(elements.editScheduleForm);
   const payload = Object.fromEntries(formData.entries());
+  if (payload.id) {
+    const current = state.schedulesById.get(String(payload.id));
+    if (current?.createdBy) {
+      payload.createdBy = current.createdBy;
+    }
+  }
   const btn = elements.editScheduleForm.querySelector("button[type=submit]");
   await persistSchedulePayload({
     payload,
@@ -1506,6 +1513,12 @@ async function submitSchedule(event) {
     payload.duplicatePeriod = true;
   }
   const editing = isEditingSchedule();
+  if (editing && payload.id) {
+    const current = state.schedulesById.get(String(payload.id));
+    if (current?.createdBy) {
+      payload.createdBy = current.createdBy;
+    }
+  }
   const endpoint = editing ? "/api/agendamentos/edit" : "/api/agendamentos";
   const button = elements.scheduleSubmitButton || elements.scheduleForm.querySelector("button[type=submit]");
   await persistSchedulePayload({

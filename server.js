@@ -16,6 +16,35 @@ const BLOCKED_SLOTS_PATH = path.join(DATA_DIR, "blocked-slots.json");
 const CONFIRMATION_DISPATCH_LOG_PATH = path.join(DATA_DIR, "confirmation-dispatch-log.json");
 const SCHEDULE_FLAGS_PATH = path.join(DATA_DIR, "schedule-flags.json");
 
+const DASHBOARD_USER_TAG_RE = /\[dashboard_user=([^\]\n\r]{1,120})\]/i;
+
+function sanitizeDashboardUserLabel(value) {
+  return String(value || "")
+    .replaceAll("\n", " ")
+    .replaceAll("\r", " ")
+    .replaceAll("]", "")
+    .trim()
+    .slice(0, 120);
+}
+
+function extractDashboardUserTag(text) {
+  const raw = String(text || "");
+  const match = raw.match(DASHBOARD_USER_TAG_RE);
+  const createdBy = match ? sanitizeDashboardUserLabel(match[1]) : "";
+  const without = raw.replace(DASHBOARD_USER_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  return { text: without, createdBy };
+}
+
+function ensureDashboardUserTag(text, createdBy) {
+  const base = extractDashboardUserTag(text).text;
+  const label = sanitizeDashboardUserLabel(createdBy);
+  if (!label) {
+    return base;
+  }
+  const tag = `[dashboard_user=${label}]`;
+  return base ? `${base}\n${tag}` : tag;
+}
+
 const DEFAULT_STATUSES = [0, 1];
 const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 const DEFAULT_TIMEOUT_MS = 12000;
@@ -117,6 +146,31 @@ function setDuplicatePeriodFlag({ osId = "", protocolo = "", id = "" }) {
   return true;
 }
 
+function setCreatedByFlag({ osId = "", protocolo = "", id = "", createdBy = "" }) {
+  const label = sanitizeDashboardUserLabel(createdBy);
+  if (!label) return false;
+  const flags = readScheduleFlags();
+  const now = new Date().toISOString();
+  const keys = [];
+  const osKey = String(osId || "").trim();
+  const protoKey = String(protocolo || "").trim();
+  const idKey = String(id || "").trim();
+  if (osKey) keys.push(`os:${osKey}`);
+  if (protoKey) keys.push(`protocolo:${protoKey}`);
+  if (idKey) keys.push(`id:${idKey}`);
+  if (!keys.length) return false;
+
+  for (const key of keys) {
+    flags[key] = {
+      ...(flags[key] || {}),
+      createdBy: label,
+      updated_at: now
+    };
+  }
+  writeScheduleFlags(flags);
+  return true;
+}
+
 function applyScheduleFlags(schedules) {
   const flags = readScheduleFlags();
   for (const item of schedules || []) {
@@ -124,17 +178,23 @@ function applyScheduleFlags(schedules) {
       continue;
     }
     if (item.duplicatePeriod) {
-      continue;
+      // keep
     }
     const osKey = String(item.osId || "").trim();
     const protoKey = String(item.protocolo || "").trim();
     const idKey = String(item.id || "").trim();
-    const hit =
-      (osKey && flags[`os:${osKey}`]?.duplicatePeriod) ||
-      (protoKey && flags[`protocolo:${protoKey}`]?.duplicatePeriod) ||
-      (idKey && flags[`id:${idKey}`]?.duplicatePeriod);
-    if (hit) {
+    const osFlags = osKey ? flags[`os:${osKey}`] : null;
+    const protoFlags = protoKey ? flags[`protocolo:${protoKey}`] : null;
+    const idFlags = idKey ? flags[`id:${idKey}`] : null;
+
+    if (!item.duplicatePeriod && (osFlags?.duplicatePeriod || protoFlags?.duplicatePeriod || idFlags?.duplicatePeriod)) {
       item.duplicatePeriod = true;
+    }
+    if (!item.createdBy) {
+      const createdBy = osFlags?.createdBy || protoFlags?.createdBy || idFlags?.createdBy || "";
+      if (createdBy) {
+        item.createdBy = createdBy;
+      }
     }
   }
 }
@@ -1739,6 +1799,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
+  const extractedObs = extractDashboardUserTag(raw.observacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -1762,7 +1823,8 @@ function normalizeSchedule(config, raw, source = "sgp") {
     endereco: raw.endereco || raw.logradouro || "",
     motivo,
     sgpStatus,
-    observacao: raw.observacao || raw.descricao || raw.motivo || "",
+    observacao: extractedObs.text,
+    createdBy: extractedObs.createdBy,
     origem: source,
     raw
   };
@@ -1812,6 +1874,7 @@ function normalizeSgpStatus(raw) {
 }
 
 function normalizeManualSchedule(entry) {
+  const extractedObs = extractDashboardUserTag(entry.justificativa || entry.observacao || "");
   return {
     id: entry.id || `manual-${cryptoRandomId()}`,
     osId: "",
@@ -1834,7 +1897,8 @@ function normalizeManualSchedule(entry) {
     endereco: entry.endereco || "",
     motivo: String(entry.motivo || "").trim(),
     sgpStatus: "",
-    observacao: entry.justificativa || entry.observacao || "",
+    observacao: extractedObs.text,
+    createdBy: sanitizeDashboardUserLabel(entry.created_by || entry.createdBy || extractedObs.createdBy),
     duplicatePeriod: Boolean(entry.duplicatePeriod),
     origem: "pre_agendamento_local",
     raw: entry
@@ -2092,6 +2156,7 @@ function serializeSchedule(item) {
     motivo: item.motivo || "",
     sgpStatus: item.sgpStatus || "",
     observacao: item.observacao,
+    createdBy: item.createdBy || "",
     duplicatePeriod: Boolean(item.duplicatePeriod),
     origem: item.origem
   };
@@ -2628,9 +2693,11 @@ async function findPopSlotConflicts(
   return { conflicts, checkedSgp };
 }
 
-async function createSchedule(payload) {
+async function createSchedule(payload, authUser = null) {
   const config = loadConfig();
   const duplicatePeriod = truthyFlag(payload?.duplicatePeriod);
+  const createdBy = sanitizeDashboardUserLabel(authUser?.nome || authUser?.sub || "");
+  const payloadCreatedBy = sanitizeDashboardUserLabel(payload?.createdBy || "");
   const entry = {
     cliente: String(payload.cliente || "").trim(),
     contrato: String(payload.contrato || "").trim(),
@@ -2642,7 +2709,8 @@ async function createSchedule(payload) {
     horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
     justificativa: String(payload.justificativa || payload.observacao || "").trim(),
-    duplicatePeriod
+    duplicatePeriod,
+    createdBy: createdBy || payloadCreatedBy
   };
 
   if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
@@ -2675,7 +2743,11 @@ async function createSchedule(payload) {
   const endpoint = String(config.agendamento?.endpoint_agendar || "").trim();
   if (endpoint) {
     try {
-      const response = await postJsonToSgp(config, endpoint, buildCreateCallPayload(config, entry));
+      const entryForSgp = {
+        ...entry,
+        justificativa: ensureDashboardUserTag(entry.justificativa, entry.createdBy)
+      };
+      const response = await postJsonToSgp(config, endpoint, buildCreateCallPayload(config, entryForSgp));
       const rows = extractListFromResponse(response);
       const created = Array.isArray(rows) && rows.length ? rows[0] : response;
       const createdOsId = String(created?.os_id || created?.id || created?.osId || "").trim();
@@ -2690,6 +2762,9 @@ async function createSchedule(payload) {
 
       if (entry.duplicatePeriod) {
         setDuplicatePeriodFlag({ osId: createdOsId, protocolo: entry.protocolo });
+      }
+      if (entry.createdBy) {
+        setCreatedByFlag({ osId: createdOsId, protocolo: entry.protocolo, createdBy: entry.createdBy });
       }
 
       if (createdOsId) {
@@ -2771,10 +2846,14 @@ async function createSchedule(payload) {
     ...entry,
     id: `manual-${Date.now()}`,
     status: "pre_agendado",
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    created_by: entry.createdBy
   });
   if (entry.duplicatePeriod) {
     setDuplicatePeriodFlag({ id: saved.id, protocolo: entry.protocolo });
+  }
+  if (entry.createdBy) {
+    setCreatedByFlag({ id: saved.id, protocolo: entry.protocolo, createdBy: entry.createdBy });
   }
 
   return {
@@ -2788,11 +2867,12 @@ async function createSchedule(payload) {
   };
 }
 
-async function updateSchedule(payload) {
+async function updateSchedule(payload, authUser = null) {
   const config = loadConfig();
   const id = String(payload.id || "").trim();
   const origem = String(payload.origem || "").trim();
   const osId = String(payload.osId || "").trim();
+  const payloadCreatedBy = sanitizeDashboardUserLabel(payload?.createdBy || "");
   const entry = {
     cliente: String(payload.cliente || "").trim(),
     contrato: String(payload.contrato || "").trim(),
@@ -2803,7 +2883,8 @@ async function updateSchedule(payload) {
     data: isoDateOnly(payload.data),
     horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
-    justificativa: String(payload.justificativa || payload.observacao || "").trim()
+    justificativa: String(payload.justificativa || payload.observacao || "").trim(),
+    createdBy: payloadCreatedBy
   };
 
   if (!id) {
@@ -2850,7 +2931,12 @@ async function updateSchedule(payload) {
   }
 
   if (origem === "pre_agendamento_local") {
-    const updated = updateManualSchedule(id, entry);
+    const manualEntry = { ...entry };
+    if (payloadCreatedBy) {
+      manualEntry.created_by = payloadCreatedBy;
+    }
+    delete manualEntry.createdBy;
+    const updated = updateManualSchedule(id, manualEntry);
     return updated
       ? {
           statusCode: 200,
@@ -2906,11 +2992,12 @@ async function updateSchedule(payload) {
 
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+        const observacaoForSgp = ensureDashboardUserTag(entry.justificativa || entry.observacao || "", entry.createdBy);
 		    const sgpPayload = {
 		      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 		      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
 		      // Observação interna (SGP)
-		      observacao: entry.justificativa || entry.observacao || "",
+		      observacao: observacaoForSgp,
 		      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 		    };
 
@@ -3388,7 +3475,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = await collectRequestBody(req);
-      const result = await createSchedule(payload);
+      const result = await createSchedule(payload, req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -3399,7 +3486,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const payload = await collectRequestBody(req);
-      const result = await updateSchedule(payload);
+      const result = await updateSchedule(payload, req.authUser);
       sendJson(res, result.statusCode, result.body);
       return;
     }
