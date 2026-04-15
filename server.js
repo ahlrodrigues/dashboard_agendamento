@@ -4112,8 +4112,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && parsedUrl.pathname === "/api/contrato") {
-      if (!req.authUser?.isAdmin) {
-        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
         return;
       }
       const result = await getContractData(parsedUrl.searchParams.get("contrato"), req.authUser);
