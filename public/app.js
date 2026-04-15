@@ -1215,7 +1215,7 @@ function renderTable(rows) {
 
 function updateMeta(data) {
   const rawVersion = String(data.dashboardVersion || data.version || "").trim();
-  const versionLabel = rawVersion ? (rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`) : "";
+  const versionLabel = rawVersion ? `v${rawVersion.replace(/^[vV]+/, "")}` : "";
   elements.snapshotLabel.innerHTML = versionLabel
     ? `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}<br /><span class="dash-version">Versao ${escapeHtml(versionLabel)}</span>`
     : `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}`;
@@ -1544,16 +1544,16 @@ async function submitSchedule(event) {
       await loadDashboard();
     },
     onError: async (error) => {
+      const detail = error?.details?.detail ? `\n${error.details.detail}` : "";
       if (String(error?.code || "") === "SLOT_OCCUPIED") {
         const context = getScheduleFormConflictContext();
         const conflicts = Array.isArray(error?.details?.conflicts) ? error.details.conflicts : [];
         applySlotConflictUi(conflicts, context);
-        const detail = error?.details?.detail ? `\n${error.details.detail}` : "";
         alert(`${error.message}${detail}`);
         return;
       }
       applySlotConflictUi([], getScheduleFormConflictContext());
-      alert(error.message);
+      alert(`${error.message}${detail}`);
       if (editing) {
         await loadDashboard().catch(() => {});
       }

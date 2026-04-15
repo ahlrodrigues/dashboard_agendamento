@@ -801,21 +801,69 @@ async function createSgpWebSession(config, credentials = null) {
 }
 
 async function fetchSgpOsEditForm(config, session, osId) {
-  const editUrl = `${session.baseUrl}/admin/atendimento/ocorrencia/os/${encodeURIComponent(String(osId).trim())}/edit/`;
-  const response = await fetch(editUrl, {
-    headers: {
-      Cookie: session.cookies
-    },
-    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-  });
-  const html = await response.text();
-  if (!response.ok || !/name=['"]data_agendamento['"]/i.test(html)) {
-    throw new Error("Nao foi possivel abrir o formulario web da OS no SGP.");
-  }
-  return {
-    url: editUrl,
-    html
+  const normalizedOsId = String(osId).trim();
+  const baseUrl = String(session.baseUrl || "").replace(/\/+$/, "");
+  const basePath = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(normalizedOsId)}/`;
+  const candidates = [`${basePath}edit/`, `${basePath}change/`];
+
+  const timeoutMs = Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS);
+  const hasScheduleField = (html) => /name=['"]data_agendamento['"]/i.test(String(html || ""));
+  const looksLikeLoginPage = (html, finalUrl) => {
+    const url = String(finalUrl || "").toLowerCase();
+    if (url.includes("/accounts/login")) return true;
+    const text = String(html || "");
+    return /name=['"]username['"]/i.test(text) && /csrfmiddlewaretoken/i.test(text);
   };
+
+  let lastAttempt = null;
+  for (const pathSuffix of candidates) {
+    const url = `${baseUrl}${pathSuffix}`;
+    const response = await fetch(url, {
+      headers: {
+        Cookie: session.cookies
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const html = await response.text();
+    const finalUrl = response.url || url;
+
+    lastAttempt = {
+      url,
+      finalUrl,
+      status: response.status,
+      ok: response.ok,
+      loginLike: looksLikeLoginPage(html, finalUrl),
+      hasField: hasScheduleField(html)
+    };
+
+    if (response.ok && hasScheduleField(html)) {
+      return { url, html };
+    }
+  }
+
+  if (lastAttempt?.loginLike) {
+    const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP (sessao expirada ou login bloqueado).");
+    error.detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}.`;
+    throw error;
+  }
+
+  if (lastAttempt?.status === 403) {
+    const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP (sem permissao).");
+    error.detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP 403.`;
+    throw error;
+  }
+
+  if (lastAttempt?.status === 404) {
+    const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP (pagina nao encontrada).");
+    error.detail = `OS ${normalizedOsId}. Tentativas: ${candidates.join(" ou ")}. HTTP 404.`;
+    throw error;
+  }
+
+  const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP.");
+  if (lastAttempt) {
+    error.detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}. Formato inesperado do formulario (campo data_agendamento ausente).`;
+  }
+  throw error;
 }
 
 function extractOccurrenceEditPathFromOsHtml(html) {
@@ -3714,7 +3762,8 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     sendJson(res, 500, {
       ok: false,
-      message: error.message || "Erro inesperado no servidor."
+      message: error.message || "Erro inesperado no servidor.",
+      ...(error?.detail ? { detail: String(error.detail) } : {})
     });
   }
 });
