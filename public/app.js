@@ -2096,7 +2096,7 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 }
 
 async function lookupContractAndFill() {
-  if (!state.isAdmin) {
+  if (!state.isAdmin && !state.isOperator) {
     return;
   }
   const contractId = elements.scheduleForm.elements.contrato.value.trim();
