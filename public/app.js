@@ -1882,7 +1882,6 @@ async function sendSelectedConfirmations(event) {
 
     const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
     alert(skippedCount ? `${data.message}\n${skippedCount} item(ns) foi(ram) ignorado(s).` : data.message);
-    await loadDashboard();
   } catch (error) {
     alert(error.message);
   } finally {
