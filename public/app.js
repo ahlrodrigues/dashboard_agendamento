@@ -1837,6 +1837,9 @@ async function sendSelectedConfirmations(event) {
     .map((id) => state.schedulesById.get(id))
     .filter((item) => item && canRequestConfirmation(item));
 
+  console.log("sendSelectedConfirmations - items selecionados:", items.length);
+  console.log("sendSelectedConfirmations - IDs:", [...state.selectedScheduleIds]);
+
   if (!items.length) {
     updateSelectionControls();
     return;
@@ -1847,10 +1850,12 @@ async function sendSelectedConfirmations(event) {
   updateSelectionControls();
 
   try {
+    console.log("sendSelectedConfirmations - Enviando para API...");
     const response = await apiFetch("/api/agendamentos/send-confirmation", {
       method: "POST",
       body: JSON.stringify({ items })
     });
+    console.log("sendSelectedConfirmations - Response status:", response.status);
     const responseText = await response.text();
     let data = null;
     try {

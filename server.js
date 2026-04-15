@@ -3847,6 +3847,9 @@ async function deleteSchedule(payload, authUser = null) {
 
 async function requestConfirmationDispatch(payload, authUser = null) {
   const items = Array.isArray(payload?.items) ? payload.items : [];
+  console.log("requestConfirmationDispatch - items recebidos:", items.length);
+  console.log("requestConfirmationDispatch - authUser:", authUser?.sub);
+  
   if (!items.length) {
     return {
       statusCode: 400,
@@ -3859,6 +3862,8 @@ async function requestConfirmationDispatch(payload, authUser = null) {
 
   const config = loadConfig();
   const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  console.log("requestConfirmationDispatch - operatorAuth:", operatorAuth ? "OK" : "NULL");
+  
   if (authUser && !operatorAuth) {
     return {
       statusCode: 401,
