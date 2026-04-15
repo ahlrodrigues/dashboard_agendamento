@@ -135,28 +135,45 @@ function showPeriodConflictModal(message) {
 }
 
 function getAuthToken() {
-  return localStorage.getItem("dashboard_token");
+  const sessionToken = sessionStorage.getItem("dashboard_token");
+  if (sessionToken) {
+    return sessionToken;
+  }
+
+  const legacyToken = localStorage.getItem("dashboard_token");
+  if (legacyToken) {
+    sessionStorage.setItem("dashboard_token", legacyToken);
+    localStorage.removeItem("dashboard_token");
+    return legacyToken;
+  }
+
+  return null;
 }
 
 function setAuthToken(token) {
-  localStorage.setItem("dashboard_token", token);
+  sessionStorage.setItem("dashboard_token", token);
+  localStorage.removeItem("dashboard_token");
 }
 
 function clearAuthToken() {
+  sessionStorage.removeItem("dashboard_token");
+  sessionStorage.removeItem("dashboard_user");
   localStorage.removeItem("dashboard_token");
   localStorage.removeItem("dashboard_user");
 }
 
 function getStoredUser() {
-  const data = localStorage.getItem("dashboard_user");
+  const data = sessionStorage.getItem("dashboard_user") || localStorage.getItem("dashboard_user");
   return data ? JSON.parse(data) : null;
 }
 
 function setStoredUser(user) {
-  localStorage.setItem("dashboard_user", JSON.stringify(user));
+  sessionStorage.setItem("dashboard_user", JSON.stringify(user));
+  localStorage.removeItem("dashboard_user");
 }
 
 function clearStoredUser() {
+  sessionStorage.removeItem("dashboard_user");
   localStorage.removeItem("dashboard_user");
 }
 
@@ -416,8 +433,15 @@ function updateScheduleSubmitButtonState() {
     return;
   }
   const hasConflict = Boolean(state.slotConflictActive);
-  button.disabled = state.pendingMutations > 0 || hasConflict;
-  button.title = hasConflict ? "Horario ocupado para o POP selecionado." : "";
+  const hasSelectedOs = Boolean(String(elements.scheduleForm?.elements?.osId?.value || "").trim());
+  button.disabled = state.pendingMutations > 0 || hasConflict || (!hasSelectedOs && state.isAdmin);
+  if (hasConflict) {
+    button.title = "Horario ocupado para o POP selecionado.";
+  } else if (!hasSelectedOs && state.isAdmin) {
+    button.title = "Selecione uma OS aberta para permitir o agendamento.";
+  } else {
+    button.title = "";
+  }
 }
 
 function setSlotConflictStatus(message = "", tone = "") {
@@ -1183,6 +1207,7 @@ function resetScheduleForm() {
   resetContractLookupState();
   setScheduleFormMode("create");
   applySlotConflictUi([], getScheduleFormConflictContext());
+  updateScheduleSubmitButtonState();
 }
 
 function markScheduleFormForSgpEdit(osId) {
@@ -1191,6 +1216,7 @@ function markScheduleFormForSgpEdit(osId) {
   form.querySelector('input[name="osId"]').value = osId;
   form.querySelector('input[name="origem"]').value = "sgp";
   setScheduleFormMode("edit");
+  updateScheduleSubmitButtonState();
 }
 
 function statusLabel(status) {
@@ -1544,6 +1570,10 @@ async function submitSchedule(event) {
     payload.duplicatePeriod = true;
   }
   const editing = isEditingSchedule();
+  if (!editing) {
+    alert("Selecione uma OS aberta para agendar. Se nao houver OS aberta, verifique no SGP.");
+    return;
+  }
   if (editing && payload.id) {
     const current = state.schedulesById.get(String(payload.id));
     if (current?.createdBy) {
@@ -1728,6 +1758,17 @@ function showToast(message) {
 }
 
 function fillScheduleFormFromContract(contract, openOses = []) {
+  // Exigir escolher uma OS aberta para agendar.
+  if (elements.scheduleForm?.elements) {
+    elements.scheduleForm.elements.id.value = "";
+    elements.scheduleForm.elements.osId.value = "";
+    elements.scheduleForm.elements.origem.value = "";
+    if (elements.scheduleForm.elements.protocolo) {
+      elements.scheduleForm.elements.protocolo.value = "";
+    }
+    setScheduleFormMode("create");
+  }
+
   if (contract.cliente) {
     elements.scheduleForm.elements.cliente.value = contract.cliente;
   }
@@ -1872,10 +1913,10 @@ function fillScheduleFormFromContract(contract, openOses = []) {
       }
     }
   } else {
-    if (elements.scheduleForm.elements.osId) {
-      elements.scheduleForm.elements.osId.value = "";
-    }
+    // Sem OS abertas: mantém em modo de criação e impede o envio.
   }
+
+  updateScheduleSubmitButtonState();
 }
 
 async function lookupContractAndFill() {
@@ -1904,7 +1945,11 @@ async function lookupContractAndFill() {
 
     fillScheduleFormFromContract(data.contract, data.openOses);
     elements.scheduleForm.dataset.loadedContract = contractId;
-    setContractLookupStatus("Dados do contrato carregados do SGP.", "success");
+    if (Array.isArray(data.openOses) && data.openOses.length) {
+      setContractLookupStatus("Selecione uma OS aberta abaixo para agendar.", "success");
+    } else {
+      setContractLookupStatus("Nao existem OS aberta - verificar no SGP.", "error");
+    }
   } catch (error) {
     elements.scheduleForm.dataset.loadedContract = "";
     setContractLookupStatus(error.message, "error");

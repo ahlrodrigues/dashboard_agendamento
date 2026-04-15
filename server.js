@@ -83,6 +83,7 @@ const DEFAULT_STATUSES = [0, 1];
 const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 const DEFAULT_TIMEOUT_MS = 12000;
 const DEFAULT_SEND_INTERVAL_MS = 30000;
+const DEFAULT_LOGIN_TTL_MS = 2 * 60 * 60 * 1000;
 const CONFIRMATION_RESEND_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const CONFIRMATION_RESEND_FIRST_MS = 2 * 60 * 60 * 1000;
 const CONFIRMATION_RESEND_SECOND_MS = 4 * 60 * 60 * 1000;
@@ -333,7 +334,7 @@ function storeSgpOperatorSession({ sessionId, username, password, ttlMs }) {
     username: normalizedUsername,
     password: normalizedPassword,
     basicAuthHeader: `Basic ${token}`,
-    expiresAt: Date.now() + Math.max(60_000, Number(ttlMs) || (8 * 60 * 60 * 1000))
+    expiresAt: Date.now() + Math.max(60_000, Number(ttlMs) || DEFAULT_LOGIN_TTL_MS)
   });
   return true;
 }
@@ -514,6 +515,21 @@ function logSgpScheduleUpdate(stage, details) {
   } catch (error) {
     console.log(`[SGP_UPDATE] ${stage}`);
   }
+}
+
+function isSgpTwoFactorBlock(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const detail = String(error?.detail || "").toLowerCase();
+  return (
+    message.includes("2fa") ||
+    message.includes("two factor") ||
+    message.includes("two-factor") ||
+    detail.includes("confirm-2fa") ||
+    detail.includes("two-factor") ||
+    detail.includes("two_factor") ||
+    detail.includes("/accounts/confirm-2fa") ||
+    detail.includes("/accounts/confirm_2fa")
+  );
 }
 
 function readConfirmationCache(osId) {
@@ -808,6 +824,13 @@ async function fetchSgpOsEditForm(config, session, osId) {
 
   const timeoutMs = Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS);
   const hasScheduleField = (html) => /name=['"]data_agendamento['"]/i.test(String(html || ""));
+  const looksLikeTwoFactorPage = (html, finalUrl) => {
+    const url = String(finalUrl || "").toLowerCase();
+    if (url.includes("/accounts/confirm-2fa") || url.includes("/accounts/confirm_2fa")) return true;
+    if (url.includes("two-factor") || url.includes("two_factor") || url.includes("2fa")) return true;
+    const text = String(html || "");
+    return /confirm-2fa|two[-_ ]factor|autenticador|authenticator|otp|token/i.test(text) && /csrfmiddlewaretoken/i.test(text);
+  };
   const looksLikeLoginPage = (html, finalUrl) => {
     const url = String(finalUrl || "").toLowerCase();
     if (url.includes("/accounts/login")) return true;
@@ -833,12 +856,19 @@ async function fetchSgpOsEditForm(config, session, osId) {
       status: response.status,
       ok: response.ok,
       loginLike: looksLikeLoginPage(html, finalUrl),
+      twoFactorLike: looksLikeTwoFactorPage(html, finalUrl),
       hasField: hasScheduleField(html)
     };
 
     if (response.ok && hasScheduleField(html)) {
       return { url, html };
     }
+  }
+
+  if (lastAttempt?.twoFactorLike) {
+    const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP (o SGP exigiu confirmacao 2FA).");
+    error.detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}.`;
+    throw error;
   }
 
   if (lastAttempt?.loginLike) {
@@ -1173,6 +1203,34 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   };
 }
 
+async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null) {
+  const normalizedOsId = String(osId || "").trim();
+  if (!normalizedOsId) {
+    throw new Error("OS nao informada para atualizacao via API do SGP.");
+  }
+
+  const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+  const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
+  const payload = {
+    os_data_agendamento: toScheduledDateTime(entry.data, entry.horario),
+    os_observacao: observacaoForSgp
+  };
+  if (forcedPriority != null) {
+    payload.os_prioridade = forcedPriority;
+  }
+  if (hasMeaningfulTechnician(entry.tecnico)) {
+    payload.os_tecnico_responsavel = entry.tecnico;
+  }
+
+  const endpoint = `/api/os/update/id/${encodeURIComponent(normalizedOsId)}/`;
+  const response = await postToSgp(config, endpoint, payload, operatorAuth);
+  return {
+    endpoint,
+    payload,
+    response
+  };
+}
+
 async function queueConfirmationDispatch(config, item, credentials = null) {
   const osId = String(item?.osId || "").trim();
   if (!osId) {
@@ -1227,14 +1285,14 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
 	      if (mutationError) {
 	        throw new Error(mutationError);
 	      }
-      if (!response?.confirmationDispatchRequested) {
-        writeConfirmationDispatchEntry(osId, {
-          state: "manual",
-          manualAt: new Date().toISOString(),
-          errorMessage: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
-        });
-        return;
-      }
+	      if (!response?.confirmationDispatchRequested) {
+	        writeConfirmationDispatchEntry(osId, {
+	          state: "manual",
+	          manualAt: new Date().toISOString(),
+	          errorMessage: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
+	        });
+	        return;
+	      }
 	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, credentials).catch(() => ({
 	        confirmationUrl: "",
 	        confirmationStatus: "aguardando_confirmacao",
@@ -1242,13 +1300,21 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
 	        confirmationSent: true,
 	        confirmationRequestedAt: new Date().toISOString()
 	      })));
-    } catch (error) {
-      writeConfirmationDispatchEntry(osId, {
-        state: "error",
-        errorAt: new Date().toISOString(),
-        errorMessage: String(error.message || "Falha ao solicitar envio ao SGP.").trim()
-      });
-    }
+	    } catch (error) {
+	      if (isSgpTwoFactorBlock(error)) {
+	        writeConfirmationDispatchEntry(osId, {
+	          state: "manual",
+	          manualAt: new Date().toISOString(),
+	          errorMessage: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
+	        });
+	        return;
+	      }
+	      writeConfirmationDispatchEntry(osId, {
+	        state: "error",
+	        errorAt: new Date().toISOString(),
+	        errorMessage: String(error.message || "Falha ao solicitar envio ao SGP.").trim()
+	      });
+	    }
   });
 }
 
@@ -1923,19 +1989,9 @@ function normalizeContractLookup(config, raw) {
 }
 
 function normalizeSchedule(config, raw, source = "sgp") {
-  const date = isoDateOnly(
-    raw.data_agendamento ||
-    raw.data_agendada ||
-    raw.data_marcada ||
-    raw.data ||
-    ""
-  );
-  const time = hhmm(
-    raw.hora_agendamento ||
-    raw.hora_marcada ||
-    raw.hora ||
-    ""
-  );
+  const scheduleDateTime = extractSgpScheduledDateTime(raw);
+  const date = scheduleDateTime.date;
+  const time = scheduleDateTime.time;
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
@@ -1968,6 +2024,62 @@ function normalizeSchedule(config, raw, source = "sgp") {
     origem: source,
     raw
   };
+}
+
+function extractSgpScheduledDateTime(raw) {
+  const dateCandidates = [
+    raw?.data_agendamento,
+    raw?.data_agendada,
+    raw?.data_marcada,
+    raw?.os_data_agendamento,
+    raw?.data_hora_agendamento,
+    raw?.dataHoraAgendamento
+  ];
+  const timeCandidates = [
+    raw?.hora_agendamento,
+    raw?.hora_agendada,
+    raw?.hora_marcada,
+    raw?.horaAgendamento
+  ];
+
+  const parseDateTime = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return { date: "", time: "" };
+    // "YYYY-MM-DD HH:MM(:SS)?" or "YYYY-MM-DDTHH:MM(:SS)?"
+    const match = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2})?/);
+    if (match) return { date: match[1], time: match[2] };
+    // "DD/MM/YYYY HH:MM(:SS)?"
+    const brMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}:\d{2})(?::\d{2})?/);
+    if (brMatch) return { date: `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`, time: brMatch[4] };
+    return { date: isoDateOnly(text), time: "" };
+  };
+
+  for (const candidate of dateCandidates) {
+    const parsed = parseDateTime(candidate);
+    if (parsed.date && parsed.time) {
+      return parsed;
+    }
+  }
+
+  let date = "";
+  for (const candidate of dateCandidates) {
+    const parsed = parseDateTime(candidate);
+    if (parsed.date) {
+      date = parsed.date;
+      break;
+    }
+  }
+
+  let time = "";
+  for (const candidate of timeCandidates) {
+    const parsedTime = hhmm(candidate);
+    if (parsedTime) {
+      time = parsedTime;
+      break;
+    }
+  }
+
+  return { date: date || "", time: time || "" };
 }
 
 function cryptoRandomId() {
@@ -2525,7 +2637,9 @@ function buildCreateCallPayload(config, entry) {
     os_prioridade: forcedPriority ?? Number(config.agendamento?.prioridade_os_padrao || 2),
     contato_nome: entry.cliente,
     contato_telefone: entry.telefone || "",
-    data_hora_agendamento: toScheduledDateTime(entry.data, entry.horario)
+    data_hora_agendamento: toScheduledDateTime(entry.data, entry.horario),
+    // Algumas instancias do SGP usam este campo para persistir a data/hora do agendamento.
+    os_data_agendamento: toScheduledDateTime(entry.data, entry.horario)
   };
 
   if (entry.tecnico) {
@@ -2875,6 +2989,18 @@ async function createSchedule(payload, authUser = null) {
     createdBy: createdBy || payloadCreatedBy
   };
 
+  const endpoint = String(config.agendamento?.endpoint_agendar || "").trim();
+  if (endpoint && !String(payload?.osId || "").trim()) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        code: "OS_REQUIRED",
+        message: "Selecione uma OS aberta para agendar. Se nao houver OS aberta, verifique no SGP."
+      }
+    };
+  }
+
   if (!entry.cliente || !entry.contrato || !entry.data || !entry.horario) {
     return {
       statusCode: 400,
@@ -2902,7 +3028,6 @@ async function createSchedule(payload, authUser = null) {
     };
   }
 
-  const endpoint = String(config.agendamento?.endpoint_agendar || "").trim();
   if (endpoint) {
     try {
       const entryForSgp = {
@@ -2930,6 +3055,20 @@ async function createSchedule(payload, authUser = null) {
       }
 
       if (createdOsId) {
+        try {
+          await updateScheduleViaSgpApi(config, createdOsId, entryForSgp, operatorAuth);
+        } catch (error) {
+          return {
+            statusCode: 502,
+            body: {
+              ok: false,
+              mode: "sgp",
+              message: `OS criada no SGP (OS ${createdOsId}), mas falhou ao definir data/hora do agendamento: ${error.message}`,
+              response: created
+            }
+          };
+        }
+
         try {
           confirmationDetails = await fetchConfirmationDetailsForOs(config, createdOsId, operatorAuth);
         } catch (error) {
@@ -3177,13 +3316,32 @@ async function updateSchedule(payload, authUser = null) {
 
     let response;
     try {
-      response = await enqueueSgpDispatch(config, () => updateScheduleViaSgpWebForm(config, osId, entry, operatorAuth));
+      response = await enqueueSgpDispatch(config, async () => {
+        try {
+          return await updateScheduleViaSgpWebForm(config, osId, entry, operatorAuth);
+        } catch (error) {
+          if (!isSgpTwoFactorBlock(error)) {
+            throw error;
+          }
+          logSgpScheduleUpdate("fallback_api", {
+            osId,
+            endpoint: `/api/os/update/id/${encodeURIComponent(String(osId || "").trim())}/`,
+            reason: "2FA_required_on_web"
+          });
+          const api = await updateScheduleViaSgpApi(config, osId, entry, operatorAuth);
+          return {
+            mode: "api",
+            ...api
+          };
+        }
+      });
     } catch (error) {
       logSgpScheduleUpdate("error", {
         osId,
         endpoint,
         payload: sgpPayload,
-        error: error.message
+        error: error.message,
+        ...(error?.detail ? { detail: String(error.detail) } : {})
       });
       throw error;
     }
@@ -3195,7 +3353,7 @@ async function updateSchedule(payload, authUser = null) {
       response
     });
 
-    const mutationError = getSgpMutationError(response);
+    const mutationError = response?.mode === "api" ? getSgpMutationError(response.response) : getSgpMutationError(response);
     if (mutationError) {
       return {
         statusCode: 502,
@@ -3210,8 +3368,9 @@ async function updateSchedule(payload, authUser = null) {
 
     await new Promise((resolve) => setTimeout(resolve, 500));
     const confirmedRow = await fetchServiceOrderById(config, osId);
-    const confirmedDate = isoDateOnly(confirmedRow?.data_agendamento || confirmedRow?.data_agendada || confirmedRow?.data || "");
-    const confirmedTime = hhmm(confirmedRow?.hora_agendamento || confirmedRow?.hora_agendada || confirmedRow?.hora || "");
+    const confirmed = extractSgpScheduledDateTime(confirmedRow);
+    const confirmedDate = confirmed.date;
+    const confirmedTime = confirmed.time;
     const expectedDate = isoDateOnly(entry.data);
     const expectedTime = hhmm(entry.horario);
 
@@ -3573,7 +3732,7 @@ const server = http.createServer(async (req, res) => {
         const isAdmin = userHasAdminGroup(userInfo, config);
 
         const sessionId = generateSessionId();
-        const ttlMs = 8 * 60 * 60 * 1000;
+        const ttlMs = DEFAULT_LOGIN_TTL_MS;
         storeSgpOperatorSession({ sessionId, username, password, ttlMs });
         
         const tokenPayload = {
