@@ -11,6 +11,7 @@ const state = {
   slotConflictActive: false,
   user: null,
   isAdmin: false,
+  isOperator: false,
   compactView: true,
   darkMode: false
 };
@@ -197,9 +198,12 @@ async function checkAuth() {
     }
 
     const data = await response.json();
+    console.log("checkAuth - data.user:", data.user);
     if (data.ok && data.user) {
       state.user = data.user;
       state.isAdmin = data.user.isAdmin;
+      state.isOperator = data.user.isOperator;
+      console.log("checkAuth - isAdmin:", state.isAdmin, "isOperator:", state.isOperator);
       setStoredUser(data.user);
       return data.user;
     }
@@ -234,6 +238,7 @@ async function login(username, password) {
     setStoredUser(data.user);
     state.user = data.user;
     state.isAdmin = data.user.isAdmin;
+    state.isOperator = data.user.isOperator;
 
     return data.user;
   } catch (error) {
@@ -256,6 +261,7 @@ async function logout() {
   clearStoredUser();
   state.user = null;
   state.isAdmin = false;
+  state.isOperator = false;
 }
 
 async function apiFetch(url, options = {}) {
@@ -802,13 +808,16 @@ function renderChip(item) {
   const selectTitle = canSendConfirmation
     ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
     : "OS indisponivel para envio";
+  const selectButton = (state.isAdmin && canSendConfirmation)
+    ? `<button class="chip-select-button${selected ? " is-selected" : ""}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>`
+    : "";
   const deleteButton = canDeleteSchedule(item)
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
   return `
     <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}${duplicatePeriodClass}"${confirmationTitle} tabindex="-1">
       <div class="chip-actions">
-        <button class="chip-select-button${selected ? " is-selected" : ""}${canSendConfirmation ? "" : " is-disabled"}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>
+        ${selectButton}
         ${deleteButton}
       </div>
       <strong>${clientName}</strong>
@@ -1073,7 +1082,9 @@ function updateSelectionControls() {
 }
 
 function canDeleteSchedule(item) {
-  if (!state.isAdmin) {
+  const canDelete = !!(!state.isAdmin && !state.isOperator ? false : (item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId)));
+  console.log("canDeleteSchedule - isAdmin:", state.isAdmin, "isOperator:", state.isOperator, "origem:", item.origem, "osId:", item.osId, "canDelete:", canDelete);
+  if (!state.isAdmin && !state.isOperator) {
     return false;
   }
   return item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId);
@@ -1306,7 +1317,10 @@ async function loadDashboard() {
     throw new Error(data.message || "Nao foi possivel atualizar o dashboard.");
   }
   state.data = data;
+  console.log("loadDashboard - data.isAdmin:", data.isAdmin, "data.isOperator:", data.isOperator);
   state.isAdmin = data.isAdmin || false;
+  state.isOperator = data.isOperator || false;
+  console.log("loadDashboard - state.isAdmin:", state.isAdmin, "state.isOperator:", state.isOperator);
   state.autoRefreshMs = Math.max(30000, Number(data.autoRefreshSeconds || 300) * 1000);
   updateAdminUiVisibility();
   renderRouteFilter(data.availableRoutes || [], data.filters?.pops || selectedRoutes);
@@ -2288,6 +2302,7 @@ async function init() {
         const loggedUser = await login(username, password);
         showMainApp();
         initMainApp();
+        refreshDashboard().catch(() => {});
       } catch (error) {
         if (elements.loginError) {
           elements.loginError.textContent = error.message || "Falha na autenticacao.";
@@ -2313,6 +2328,7 @@ async function init() {
 function updateAdminUiVisibility() {
   if (state.isAdmin) {
     document.body.classList.add("is-admin");
+    document.body.classList.remove("is-operator");
     if (elements.userBadge) {
       elements.userBadge.textContent = "Admin";
       elements.userBadge.className = "badge success";
@@ -2325,6 +2341,7 @@ function updateAdminUiVisibility() {
     updateCompactView();
   } else {
     document.body.classList.remove("is-admin");
+    document.body.classList.add("is-operator");
     if (elements.userBadge) {
       elements.userBadge.textContent = "Operador";
       elements.userBadge.className = "badge neutral";

@@ -189,11 +189,14 @@ body.dark .modal-content {
   box-shadow: var(--shadow);
 }
 
-.admin-only {
+.admin-only,
+.operator-access {
   display: none !important;
 }
 
-body.is-admin .admin-only {
+body.is-admin .admin-only,
+body.is-admin .operator-access,
+body.is-operator .operator-access {
   display: revert !important;
 }
 

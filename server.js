@@ -2806,8 +2806,10 @@ async function getDashboardData(query, authUser = null) {
     availableRoutes,
     grid,
     schedules: filteredSerializedSchedules,
-    isAdmin: Boolean(authUser?.isAdmin)
+    isAdmin: Boolean(authUser?.isAdmin),
+    isOperator: Boolean(authUser?.isOperator)
   };
+  console.log("getDashboardData - authUser.isAdmin:", authUser?.isAdmin, "authUser.isOperator:", authUser?.isOperator);
 }
 
 function toScheduledDateTime(date, time) {
@@ -4005,6 +4007,8 @@ const server = http.createServer(async (req, res) => {
 
         const userInfo = await fetchSgpUserInfo(config, username, password);
         const isAdmin = userHasAdminGroup(userInfo, config);
+        const isOperator = !isAdmin;
+        console.log("Login - isAdmin:", isAdmin, "isOperator:", isOperator);
 
         const sessionId = generateSessionId();
         const ttlMs = DEFAULT_LOGIN_TTL_MS;
@@ -4016,6 +4020,7 @@ const server = http.createServer(async (req, res) => {
           email: userInfo.email,
           grupos: userInfo.grupos || [],
           isAdmin,
+          isOperator,
           sgpSessionId: sessionId,
           iat: Date.now(),
           exp: Date.now() + ttlMs
@@ -4030,7 +4035,8 @@ const server = http.createServer(async (req, res) => {
             username: userInfo.usuario,
             nome: userInfo.nome,
             email: userInfo.email,
-            isAdmin
+            isAdmin,
+            isOperator
           }
         });
       } catch (error) {
@@ -4064,13 +4070,16 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      console.log("/api/auth/me - payload.isAdmin:", payload.isAdmin, "payload.isOperator:", payload.isOperator);
+
       sendJson(res, 200, {
         ok: true,
         user: {
           username: payload.sub,
           nome: payload.nome,
           email: payload.email,
-          isAdmin: payload.isAdmin
+          isAdmin: payload.isAdmin,
+          isOperator: payload.isOperator
         }
       });
       return;
@@ -4113,8 +4122,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
-      if (!req.authUser?.isAdmin) {
-        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
         return;
       }
       const payload = await collectRequestBody(req);
@@ -4124,8 +4133,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos/edit") {
-      if (!req.authUser?.isAdmin) {
-        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
         return;
       }
       const payload = await collectRequestBody(req);
