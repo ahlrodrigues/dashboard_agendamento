@@ -493,6 +493,19 @@ select[multiple] {
   color: var(--text);
 }
 
+.ghost-button.small-button {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+}
+
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
 .primary-button:hover,
 .ghost-button:hover {
   transform: translateY(-1px);

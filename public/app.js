@@ -38,6 +38,7 @@ const elements = {
   routeModePop: document.querySelector("#routeModePop"),
   routeFilter: document.querySelector("#routeFilter"),
   searchFilter: document.querySelector("#searchFilter"),
+  clearFiltersButton: document.querySelector("#clearFiltersButton"),
   refreshButton: document.querySelector("#refreshButton"),
   prevWeekButton: document.querySelector("#prevWeekButton"),
   nextWeekButton: document.querySelector("#nextWeekButton"),
@@ -311,6 +312,24 @@ function applySevenDayWindowFromStartDate(dateText) {
   const base = dateText || toLocalIsoDate(new Date());
   elements.startDateFilter.value = base;
   elements.endDateFilter.value = shiftDate(base, 6);
+}
+
+function clearDashboardFilters() {
+  applySevenDayWindowFromStartDate(toLocalIsoDate(new Date()));
+  if (elements.statusFilter) {
+    elements.statusFilter.value = "todos";
+  }
+  if (elements.routeModeTechnician) {
+    elements.routeModeTechnician.checked = true;
+  }
+  if (elements.routeModePop) {
+    elements.routeModePop.checked = false;
+  }
+  applySelectedRoutes([]);
+  if (elements.searchFilter) {
+    elements.searchFilter.value = "";
+  }
+  refreshDashboard();
 }
 
 function hhmm(value) {
@@ -1930,6 +1949,9 @@ function wireEvents() {
   }
   if (elements.routeModePop) {
     elements.routeModePop.addEventListener("change", refreshDashboard);
+  }
+  if (elements.clearFiltersButton) {
+    elements.clearFiltersButton.addEventListener("click", clearDashboardFilters);
   }
   elements.startDateFilter.addEventListener("change", () => {
     applySevenDayWindowFromStartDate(elements.startDateFilter.value);

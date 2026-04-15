@@ -8,8 +8,8 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Agenda SGP Call Center</title>
-  <link rel="stylesheet" href="/styles.css?v=22" />
-  <script src="/app.js?v=23" defer></script>
+	  <link rel="stylesheet" href="/styles.css?v=23" />
+	  <script src="/app.js?v=24" defer></script>
 </head>
 
 <body>
@@ -83,9 +83,9 @@
           </select>
         </label>
 
-        <label class="field">
-          <span>POP</span>
-          <div class="route-mode-toggle" role="group" aria-label="Modo do filtro POP">
+	        <label class="field">
+	          <span>POP</span>
+	          <div class="route-mode-toggle" role="group" aria-label="Modo do filtro POP">
             <label class="radio-option">
               <input id="routeModeTechnician" type="radio" name="routeMode" value="technician" checked />
               Técnico
@@ -96,14 +96,18 @@
             </label>
           </div>
           <select id="routeFilter" multiple size="5"></select>
-          <small class="field-hint">Segure `Ctrl` para selecionar mais de um POP.</small>
-        </label>
+	          <small class="field-hint">Segure `Ctrl` para selecionar mais de um POP.</small>
+	        </label>
 
-        <label class="field">
-          <span>Busca</span>
-          <input id="searchFilter" type="search" placeholder="Cliente, contrato, protocolo..." />
-        </label>
-      </section>
+	        <div class="filter-actions">
+	          <button id="clearFiltersButton" class="ghost-button small-button" type="button">Limpar filtros</button>
+	        </div>
+
+	        <label class="field">
+	          <span>Busca</span>
+	          <input id="searchFilter" type="search" placeholder="Cliente, contrato, protocolo..." />
+	        </label>
+	      </section>
 
 		      <section class="panel admin-only">
 		        <div class="panel-header">
