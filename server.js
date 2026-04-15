@@ -1211,24 +1211,180 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
-  const payload = {
-    os_data_agendamento: toScheduledDateTime(entry.data, entry.horario),
-    os_observacao: observacaoForSgp
+  const scheduledDateTime = toScheduledDateTime(entry.data, entry.horario);
+  const scheduledDateTimeBr = toBrazilDateTime(entry.data, entry.horario);
+  const scheduledDate = isoDateOnly(entry.data);
+  const scheduledTime = hhmm(entry.horario);
+
+  const osUpdateEndpoint = `/api/os/update/id/${encodeURIComponent(normalizedOsId)}/`;
+  const centralUpdateEndpoint = `/api/central/chamado/update/${encodeURIComponent(normalizedOsId)}/`;
+  const expectedDate = scheduledDate;
+  const expectedTime = scheduledTime;
+
+  const buildOsUpdatePayload = (label, dateTimeValue) => {
+    const dataAgendamentoValue = label === "br" && scheduledDateTimeBr ? scheduledDateTimeBr : dateTimeValue;
+    const payload = {
+      // Alguns endpoints aceitam apenas um formato/campo; enviamos variantes para maximizar compatibilidade.
+      os_data_agendamento: dateTimeValue,
+      data_hora_agendamento: dateTimeValue,
+      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
+      data_agendamento: dataAgendamentoValue,
+      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+      // Variantes de observacao/responsavel/prioridade variam entre instancias.
+      os_observacao: observacaoForSgp,
+      observacao: observacaoForSgp,
+      contato_nome: String(entry?.cliente || "").trim(),
+      contato_telefone: String(entry?.telefone || "").trim()
+    };
+    if (forcedPriority != null) {
+      payload.os_prioridade = forcedPriority;
+      payload.prioridade = forcedPriority;
+    }
+    if (hasMeaningfulTechnician(entry.tecnico)) {
+      payload.os_tecnico_responsavel = entry.tecnico;
+      payload.responsavel = entry.tecnico;
+    }
+    return payload;
   };
-  if (forcedPriority != null) {
-    payload.os_prioridade = forcedPriority;
-  }
-  if (hasMeaningfulTechnician(entry.tecnico)) {
-    payload.os_tecnico_responsavel = entry.tecnico;
+
+  const buildCentralUpdatePayload = (dateTimeValue) => {
+    // O endpoint central costuma validar tecnico por ID em algumas instancias.
+    // Para evitar "Tecnico nao localizado", nao enviamos campos de tecnico/responsavel aqui.
+    // O objetivo principal e persistir data/hora do agendamento.
+    const payload = {
+      os_data_agendamento: dateTimeValue,
+      data_hora_agendamento: dateTimeValue,
+      data_agendamento: scheduledDate,
+      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+      os_observacao: observacaoForSgp,
+      observacao: observacaoForSgp
+    };
+    if (forcedPriority != null) {
+      payload.os_prioridade = forcedPriority;
+      payload.prioridade = forcedPriority;
+    }
+    return payload;
+  };
+
+  const attempts = [];
+  const verifyIfExpected = async () => {
+    if (expectedDate && expectedTime) {
+      const confirmed = await verifySgpScheduleUpdate(config, normalizedOsId, expectedDate, expectedTime, operatorAuth);
+      if (confirmed.date === expectedDate && confirmed.time === expectedTime) {
+        return confirmed;
+      }
+    }
+    return null;
+  };
+
+  const tryCentralJsonUpdate = async (label, dateTimeValue) => {
+    const payload = buildCentralUpdatePayload(dateTimeValue);
+    try {
+      const response = await postJsonToSgp(config, centralUpdateEndpoint, payload, operatorAuth, { includeBasePayload: true });
+      attempts.push({ label: `central_json_${label}`, endpoint: centralUpdateEndpoint, payload, response });
+    } catch (error) {
+      attempts.push({
+        label: `central_json_${label}`,
+        endpoint: centralUpdateEndpoint,
+        payload,
+        error: error?.message || String(error)
+      });
+      return { ok: false, confirmed: null };
+    }
+    const confirmed = await verifyIfExpected();
+    return confirmed ? { ok: true, confirmed } : { ok: false, confirmed: null };
+  };
+
+  const tryCentralFormUpdate = async (label, dateTimeValue) => {
+    const payload = buildCentralUpdatePayload(dateTimeValue);
+    try {
+      const response = await postToSgp(config, centralUpdateEndpoint, payload, operatorAuth);
+      attempts.push({ label: `central_form_${label}`, endpoint: centralUpdateEndpoint, payload, response });
+    } catch (error) {
+      attempts.push({
+        label: `central_form_${label}`,
+        endpoint: centralUpdateEndpoint,
+        payload,
+        error: error?.message || String(error)
+      });
+      return { ok: false, confirmed: null };
+    }
+    const confirmed = await verifyIfExpected();
+    return confirmed ? { ok: true, confirmed } : { ok: false, confirmed: null };
+  };
+
+  const tryOsUpdateForm = async (label, dateTimeValue) => {
+    const payload = buildOsUpdatePayload(label, dateTimeValue);
+    const response = await postToSgp(config, osUpdateEndpoint, payload, operatorAuth);
+    attempts.push({ label: `os_update_${label}`, endpoint: osUpdateEndpoint, payload, response });
+    const confirmed = await verifyIfExpected();
+    return confirmed ? { ok: true, confirmed } : { ok: false, confirmed: null };
+  };
+
+  // Em alguns SGPs, /api/os/update/id/ responde sucesso mas nao persiste a hora.
+  // Quando app/token estiver configurado, tentamos primeiro o endpoint central (JSON).
+  if (hasAppTokenAuth(config)) {
+    const centralIsoForm = await tryCentralFormUpdate("iso", scheduledDateTime);
+    if (centralIsoForm.ok) {
+      const last = attempts[attempts.length - 1];
+      return {
+        endpoint: last.endpoint,
+        payload: last.payload,
+        response: last.response,
+        attempts,
+        verified: centralIsoForm.confirmed,
+        verifiedBy: last.label
+      };
+    }
+
+    const centralIsoJson = await tryCentralJsonUpdate("iso", scheduledDateTime);
+    if (centralIsoJson.ok) {
+      const last = attempts[attempts.length - 1];
+      return {
+        endpoint: last.endpoint,
+        payload: last.payload,
+        response: last.response,
+        attempts,
+        verified: centralIsoJson.confirmed,
+        verifiedBy: last.label
+      };
+    }
   }
 
-  const endpoint = `/api/os/update/id/${encodeURIComponent(normalizedOsId)}/`;
-  const response = await postToSgp(config, endpoint, payload, operatorAuth);
-  return {
-    endpoint,
-    payload,
-    response
+  const isoAttempt = await tryOsUpdateForm("iso", scheduledDateTime);
+  if (isoAttempt.ok) {
+    const lastIso = attempts[attempts.length - 1];
+    return {
+      endpoint: lastIso.endpoint,
+      payload: lastIso.payload,
+      response: lastIso.response,
+      attempts,
+      verified: isoAttempt.confirmed,
+      verifiedBy: lastIso.label
+    };
+  }
+
+  if (scheduledDateTimeBr && scheduledDateTimeBr !== scheduledDateTime) {
+    const brAttempt = await tryOsUpdateForm("br", scheduledDateTimeBr);
+    if (brAttempt.ok) {
+      const lastBr = attempts[attempts.length - 1];
+      return {
+        endpoint: lastBr.endpoint,
+        payload: lastBr.payload,
+        response: lastBr.response,
+        attempts,
+        verified: brAttempt.confirmed,
+        verifiedBy: lastBr.label
+      };
+    }
+  }
+
+  const last = attempts[attempts.length - 1] || {
+    endpoint: osUpdateEndpoint,
+    payload: buildOsUpdatePayload("iso", scheduledDateTime),
+    response: null
   };
+  return { endpoint: last.endpoint, payload: last.payload, response: last.response, attempts };
 }
 
 async function queueConfirmationDispatch(config, item, credentials = null) {
@@ -1611,6 +1767,52 @@ async function fetchServiceOrderById(config, osId, operatorAuth = null) {
   }
 
   return null;
+}
+
+function pickSgpScheduleDebugFields(row) {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+  const keys = [
+    "id",
+    "os_id",
+    "contrato",
+    "status",
+    "status_id",
+    "tipo",
+    "tipo_id",
+    "data_agendamento",
+    "hora_agendamento",
+    "data_hora_agendamento",
+    "os_data_agendamento",
+    "data_agendada",
+    "hora_agendada",
+    "data_cadastro",
+    "hora_cadastro",
+    "data",
+    "hora"
+  ];
+  const output = {};
+  for (const key of keys) {
+    const value = row[key];
+    if (value === undefined || value === null || value === "") continue;
+    output[key] = value;
+  }
+  return output;
+}
+
+async function verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth = null) {
+  const waits = [600, 2200, 5200, 9200];
+  let last = { date: "", time: "" };
+  for (const waitMs of waits) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    const row = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
+    last = extractSgpScheduledDateTime(row);
+    if (last.date === expectedDate && last.time === expectedTime) {
+      return last;
+    }
+  }
+  return last;
 }
 
 async function lookupContract(config, contractId, operatorAuth = null) {
@@ -2027,20 +2229,36 @@ function normalizeSchedule(config, raw, source = "sgp") {
 }
 
 function extractSgpScheduledDateTime(raw) {
-  const dateCandidates = [
+  const dateOnlyCandidates = [
     raw?.data_agendamento,
     raw?.data_agendada,
     raw?.data_marcada,
-    raw?.os_data_agendamento,
-    raw?.data_hora_agendamento,
-    raw?.dataHoraAgendamento
+    raw?.data
   ];
-  const timeCandidates = [
+  const timeOnlyCandidates = [
     raw?.hora_agendamento,
     raw?.hora_agendada,
     raw?.hora_marcada,
+    raw?.hora,
     raw?.horaAgendamento
   ];
+  const dateTimeCandidates = [
+    raw?.data_hora_agendamento,
+    raw?.dataHoraAgendamento,
+    raw?.os_data_agendamento,
+    raw?.data_agendamento,
+    raw?.data_agendada
+  ];
+
+  const parseDateOnly = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+    const brMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+    return isoDateOnly(text);
+  };
 
   const parseDateTime = (value) => {
     const text = String(value || "").trim();
@@ -2051,31 +2269,43 @@ function extractSgpScheduledDateTime(raw) {
     // "DD/MM/YYYY HH:MM(:SS)?"
     const brMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}:\d{2})(?::\d{2})?/);
     if (brMatch) return { date: `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`, time: brMatch[4] };
-    return { date: isoDateOnly(text), time: "" };
+    return { date: parseDateOnly(text), time: "" };
   };
 
-  for (const candidate of dateCandidates) {
-    const parsed = parseDateTime(candidate);
-    if (parsed.date && parsed.time) {
-      return parsed;
-    }
-  }
-
   let date = "";
-  for (const candidate of dateCandidates) {
-    const parsed = parseDateTime(candidate);
-    if (parsed.date) {
-      date = parsed.date;
+  for (const candidate of dateOnlyCandidates) {
+    const parsed = parseDateOnly(candidate);
+    if (parsed) {
+      date = parsed;
       break;
     }
   }
 
   let time = "";
-  for (const candidate of timeCandidates) {
+  for (const candidate of timeOnlyCandidates) {
     const parsedTime = hhmm(candidate);
     if (parsedTime) {
       time = parsedTime;
       break;
+    }
+  }
+
+  // Preferir campos separados (data_agendamento + hora_agendamento). Muitos retornos trazem
+  // "os_data_agendamento" com horario de criacao/atualizacao, nao necessariamente o horario do agendamento.
+  if (date && time) {
+    return { date, time };
+  }
+
+  for (const candidate of dateTimeCandidates) {
+    const parsed = parseDateTime(candidate);
+    if (!date && parsed.date) {
+      date = parsed.date;
+    }
+    if (!time && parsed.time) {
+      time = parsed.time;
+    }
+    if (date && time) {
+      return { date, time };
     }
   }
 
@@ -2587,6 +2817,20 @@ function toScheduledDateTime(date, time) {
   return `${date} ${time.slice(0, 5)}:00`;
 }
 
+function isScheduleDateTimeInPast(date, time, now = new Date()) {
+  const isoDate = isoDateOnly(date);
+  const hhmmValue = hhmm(time);
+  if (!isoDate || !hhmmValue) {
+    return false;
+  }
+  const scheduled = new Date(`${isoDate}T${hhmmValue}:00`);
+  if (!Number.isFinite(scheduled.getTime())) {
+    return false;
+  }
+  // Tolerância pequena para evitar flutuações de relógio/rede.
+  return scheduled.getTime() < (now.getTime() - 60_000);
+}
+
 function currentDateTimeForSgp() {
   const now = new Date();
   const parts = [
@@ -2649,20 +2893,22 @@ function buildCreateCallPayload(config, entry) {
   return payload;
 }
 
-async function postJsonToSgp(config, endpointPath, payload, operatorAuth = null) {
+async function postJsonToSgp(config, endpointPath, payload, operatorAuth = null, options = {}) {
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   if (!baseUrl) {
     throw new Error("url_base nao configurada.");
   }
 
   const url = `${baseUrl}${endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`}`;
+  const includeBasePayload = Boolean(options?.includeBasePayload);
+  const finalPayload = includeBasePayload ? { ...buildBasePayload(config), ...(payload || {}) } : payload;
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...buildSgpAuthHeaders(config, operatorAuth)
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(finalPayload),
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
   });
 
@@ -3011,6 +3257,17 @@ async function createSchedule(payload, authUser = null) {
     };
   }
 
+  if (isScheduleDateTimeInPast(entry.data, entry.horario)) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        code: "SCHEDULE_IN_PAST",
+        message: `Horario selecionado ja passou: ${entry.data} ${hhmm(entry.horario)}. Escolha um horario futuro.`
+      }
+    };
+  }
+
   const conflictCheck = await findPopSlotConflicts(config, entry, { includeSchedules: false, includeBlocks: true });
   if (conflictCheck.conflicts.length) {
     const rotaLabel = String(entry.rota || "").trim() || "POP";
@@ -3218,6 +3475,17 @@ async function updateSchedule(payload, authUser = null) {
     };
   }
 
+  if (isScheduleDateTimeInPast(entry.data, entry.horario)) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        code: "SCHEDULE_IN_PAST",
+        message: `Horario selecionado ja passou: ${entry.data} ${hhmm(entry.horario)}. Escolha um horario futuro.`
+      }
+    };
+  }
+
   const conflictCheck = await findPopSlotConflicts(config, entry, {
     ignoreId: id,
     ignoreOsId: osId,
@@ -3366,13 +3634,13 @@ async function updateSchedule(payload, authUser = null) {
       };
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const confirmedRow = await fetchServiceOrderById(config, osId);
-    const confirmed = extractSgpScheduledDateTime(confirmedRow);
-    const confirmedDate = confirmed.date;
-    const confirmedTime = confirmed.time;
     const expectedDate = isoDateOnly(entry.data);
     const expectedTime = hhmm(entry.horario);
+    const confirmed = response?.mode === "api" && response?.verified?.date && response?.verified?.time
+      ? response.verified
+      : await verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth);
+    const confirmedDate = confirmed.date;
+    const confirmedTime = confirmed.time;
 
     logSgpScheduleUpdate("verification", {
       osId,
@@ -3387,6 +3655,13 @@ async function updateSchedule(payload, authUser = null) {
     });
 
     if (confirmedDate !== expectedDate || confirmedTime !== expectedTime) {
+      const confirmedRow = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
+      logSgpScheduleUpdate("verification_raw", {
+        osId,
+        expected: { data_agendamento: expectedDate, hora_agendamento: expectedTime },
+        confirmed: { data_agendamento: confirmedDate, hora_agendamento: confirmedTime },
+        fields: pickSgpScheduleDebugFields(confirmedRow)
+      });
       return {
         statusCode: 502,
         body: {

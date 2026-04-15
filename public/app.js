@@ -1485,6 +1485,161 @@ async function handleCalendarGridClick(event) {
   fillScheduleFormFromSchedule(item);
 }
 
+function buildOptimisticScheduleItem(payload, originalItem) {
+  const data = payload.data || "";
+  const horario = payload.horario || "";
+  const time = hhmm(horario);
+  const turno = inferTurnoFromTime(horario);
+  return {
+    ...(originalItem || {}),
+    id: payload.id || originalItem?.id || "",
+    osId: payload.osId || originalItem?.osId || "",
+    protocolo: payload.protocolo || originalItem?.protocolo || "",
+    origem: payload.origem || originalItem?.origem || "sgp",
+    cliente: payload.cliente || originalItem?.cliente || "",
+    contrato: payload.contrato || originalItem?.contrato || "",
+    telefone: payload.telefone || originalItem?.telefone || "",
+    rota: payload.rota || originalItem?.rota || "",
+    tecnico: payload.tecnico || originalItem?.tecnico || "",
+    data,
+    horario: time,
+    endereco: payload.endereco || originalItem?.endereco || "",
+    observacao: payload.observacao || originalItem?.observacao || "",
+    createdBy: payload.createdBy || originalItem?.createdBy || "",
+    confirmationStatus: originalItem?.confirmationStatus || "sem_confirmacao",
+    confirmationUrl: originalItem?.confirmationUrl || "",
+    confirmationSent: originalItem?.confirmationSent || false
+  };
+}
+
+function removeItemFromGridCells(grid, itemId) {
+  if (!grid?.cells) return;
+  for (const date of Object.keys(grid.cells)) {
+    for (const slot of Object.keys(grid.cells[date])) {
+      grid.cells[date][slot] = (grid.cells[date][slot] || []).filter(item => item.id !== itemId);
+    }
+  }
+}
+
+function addItemToGridCells(grid, item) {
+  if (!grid?.cells || !item?.data || !item?.horario) return;
+  const date = item.data;
+  const slot = item.horario;
+  if (!grid.cells[date]) {
+    grid.cells[date] = {};
+  }
+  if (!grid.cells[date][slot]) {
+    grid.cells[date][slot] = [];
+  }
+  const exists = grid.cells[date][slot].some(i => i.id === item.id);
+  if (!exists) {
+    grid.cells[date][slot].push(item);
+  }
+}
+
+function applyScheduleUpdateLocally(payload, data, editing) {
+  const id = String(payload.id || "").trim();
+  const osId = String(payload.osId || payload.protocolo || "").trim();
+  if (!id && !osId) return false;
+
+  if (!state.data?.grid) return false;
+
+  let originalItem = null;
+  if (id) {
+    originalItem = state.schedulesById.get(id);
+  }
+  if (!originalItem && osId) {
+    for (const [itemId, item] of state.schedulesById) {
+      if (String(item.osId || item.protocolo || "").trim() === osId) {
+        originalItem = item;
+        break;
+      }
+    }
+  }
+
+  const updatedItem = buildOptimisticScheduleItem(payload, originalItem);
+  if (!updatedItem.id) return false;
+
+  state.schedulesById.set(updatedItem.id, updatedItem);
+
+  removeItemFromGridCells(state.data.grid, updatedItem.id);
+  addItemToGridCells(state.data.grid, updatedItem);
+
+  if (state.data.schedules) {
+    const idx = state.data.schedules.findIndex(s => 
+      s.id === updatedItem.id || 
+      String(s.osId || s.protocolo || "").trim() === osId
+    );
+    if (idx >= 0) {
+      state.data.schedules[idx] = updatedItem;
+    } else {
+      state.data.schedules.push(updatedItem);
+    }
+  }
+
+  return true;
+}
+
+function showSuccessMessageAndRefresh(data, payload, editing) {
+  const message = buildScheduleSuccessMessage(data, payload, editing);
+  
+  showToast(message.replace(/\n/g, " · "));
+  
+  applyScheduleUpdateLocally(payload, data, editing);
+  
+  if (state.data?.grid) {
+    renderCalendar(state.data.grid);
+  }
+  
+  if (state.data?.schedules) {
+    renderTable(state.data.schedules);
+  }
+
+  const isModalOpen = elements.scheduleModal?.open;
+  if (isModalOpen) {
+    elements.scheduleModal.close();
+  }
+  
+  resetScheduleForm();
+}
+
+function applyScheduleRemovalLocally(id, osId) {
+  const normalizedId = String(id || "").trim();
+  const normalizedOsId = String(osId || "").trim();
+  
+  if (!normalizedId && !normalizedOsId) return;
+  
+  let itemToRemove = null;
+  if (normalizedId) {
+    itemToRemove = state.schedulesById.get(normalizedId);
+  }
+  if (!itemToRemove && normalizedOsId) {
+    for (const [itemId, item] of state.schedulesById) {
+      if (String(item.osId || item.protocolo || "").trim() === normalizedOsId) {
+        itemToRemove = item;
+        break;
+      }
+    }
+  }
+  
+  if (!itemToRemove) return;
+  
+  const removeId = itemToRemove.id;
+  state.schedulesById.delete(removeId);
+  
+  if (state.selectedScheduleIds) {
+    state.selectedScheduleIds.delete(removeId);
+  }
+  
+  removeItemFromGridCells(state.data?.grid, removeId);
+  
+  if (state.data?.schedules) {
+    state.data.schedules = state.data.schedules.filter(s => s.id !== removeId);
+  }
+  
+  updateSelectionControls();
+}
+
 async function submitEditSchedule(event) {
   event.preventDefault();
   if (!String(elements.editScheduleForm.elements.horario?.value || "").trim()) {
@@ -1506,9 +1661,7 @@ async function submitEditSchedule(event) {
     editing: true,
     button: btn,
     onSuccess: async (data) => {
-      alert(buildScheduleSuccessMessage(data, payload, true));
-      elements.scheduleModal.close();
-      await loadDashboard();
+      showSuccessMessageAndRefresh(data, payload, true);
     },
     onError: async (error) => {
       const detail = error?.details?.detail ? `\n${error.details.detail}` : "";
@@ -1538,9 +1691,19 @@ async function submitCancelSchedule(event) {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.message || "Falha ao excluir agendamento.");
-    alert(data.message || "Agendamento encerrado/cancelado com sucesso.");
+    
+    showToast(data.message || "Agendamento encerrado/cancelado com sucesso.");
+    applyScheduleRemovalLocally(id, osId);
+    
+    if (state.data?.grid) {
+      renderCalendar(state.data.grid);
+    }
+    if (state.data?.schedules) {
+      renderTable(state.data.schedules);
+    }
+    
     elements.scheduleModal.close();
-    await loadDashboard();
+    resetScheduleForm();
   } catch (error) {
     alert(error.message);
   } finally {
@@ -1588,9 +1751,7 @@ async function submitSchedule(event) {
     editing,
     button,
     onSuccess: async (data) => {
-      alert(buildScheduleSuccessMessage(data, payload, editing));
-      resetScheduleForm();
-      await loadDashboard();
+      showSuccessMessageAndRefresh(data, payload, editing);
     },
     onError: async (error) => {
       const detail = error?.details?.detail ? `\n${error.details.detail}` : "";
@@ -1754,7 +1915,8 @@ function showToast(message) {
   toast.className = "toast success";
   toast.textContent = message;
   container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  const duration = message.length > 80 ? 5000 : 3000;
+  setTimeout(() => toast.remove(), duration);
 }
 
 function fillScheduleFormFromContract(contract, openOses = []) {
