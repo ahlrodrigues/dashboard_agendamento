@@ -1166,45 +1166,91 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
   const osIdStr = String(osId || "").trim();
   if (!osIdStr) return null;
   
+  console.log("[getOsDetailsViaApi] Tentando buscar OS:", osIdStr);
+  
+  // Primeiro tenta o endpoint da lista com filtro por ID
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
-  const url = `${baseUrl}/api/ura/ordemservico/list/`;
   
-  const bodyPayload = {
-    ...buildBasePayload(config),
-    filtro: { os_id: Number(osIdStr) }
-  };
-  
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildSgpAuthHeaders(config, credentials)
-    },
-    body: JSON.stringify(bodyPayload),
-    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-  });
-  
-  if (!response.ok) {
-    throw new Error(`API fallback falhou: ${response.status}`);
+  // Tentativa 1: /api/ura/ordemservico/list/ com filtro id
+  try {
+    const listUrl = `${baseUrl}/api/ura/ordemservico/list/`;
+    const bodyPayload = {
+      ...buildBasePayload(config),
+      filtro: { id: Number(osIdStr) }
+    };
+    
+    console.log("[getOsDetailsViaApi] Tentando endpoint de lista:", listUrl);
+    
+    const response = await fetch(listUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildSgpAuthHeaders(config, credentials)
+      },
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API lista falhou: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log("[getOsDetailsViaApi] Resposta da lista:", JSON.stringify(data).substring(0, 500));
+    
+    // O endpoint /api/ura/ordemservico/list/ retorna { ordens_servicos: [...] }
+    const osList = data?.ordens_servicos || data?.data || data?.rows || [];
+    
+    if (osList && osList.length > 0) {
+      const os = osList[0];
+      console.log("[getOsDetailsViaApi] OS encontrada na lista:", os.id, "anotacao:", os.anotacao, "motivo:", os.motivo);
+      
+      return {
+        ok: true,
+        anotacao: String(os.anotacao || os.observacao || ""),
+        observacao: String(os.observacao || os.anotacao || ""),
+        conteudo: String(os.conteudo || os.descritivo || ""),
+        responsavel: String(os.responsavel || ""),
+        data_agendamento: String(os.data_agendamento || "")
+      };
+    }
+  } catch (err) {
+    console.error("[getOsDetailsViaApi] Erro na lista:", err.message);
   }
   
-  const data = await response.json();
-  const rows = Array.isArray(data) ? data : (data?.data || data?.rows || []);
-  
-  if (!rows || rows.length === 0) {
-    return null;
+  // Tentativa 2: tentar endpoint direto /api/os/{id} se existir
+  try {
+    const osUrl = `${baseUrl}/api/os/${osIdStr}/`;
+    console.log("[getOsDetailsViaApi] Tentando endpoint direto:", osUrl);
+    
+    const response = await fetch(osUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildSgpAuthHeaders(config, credentials)
+      },
+      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+    });
+    
+    if (response.ok) {
+      const os = await response.json();
+      console.log("[getOsDetailsViaApi] OS direta:", os.id, "anotacao:", os.anotacao);
+      
+      return {
+        ok: true,
+        anotacao: String(os.anotacao || os.observacao || ""),
+        observacao: String(os.observacao || os.anotacao || ""),
+        conteudo: String(os.conteudo || os.descricao || ""),
+        responsavel: String(os.responsavel || ""),
+        data_agendamento: String(os.data_agendamento || "")
+      };
+    }
+  } catch (err) {
+    console.error("[getOsDetailsViaApi] Erro no endpoint direto:", err.message);
   }
   
-  const os = rows[0];
-  return {
-    ok: true,
-    anotacao: String(os.anotacao || os.observacao || ""),
-    observacao: String(os.observacao || os.anotacao || ""),
-    conteudo: String(os.conteudo || os.descritivo || ""),
-    responsavel: String(os.responsavel || ""),
-    data_agendamento: String(os.data_agendamento || "")
-  };
-}
+  console.log("[getOsDetailsViaApi] Nenhum dado encontrado");
+  return null;
 
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
   const session = await createSgpWebSession(config, credentials);
