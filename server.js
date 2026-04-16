@@ -4330,26 +4330,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && parsedUrl.pathname.startsWith("/api/os/")) {
-      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
-        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
-        return;
-      }
-      const osId = parsedUrl.pathname.replace("/api/os/", "").replace(/\/$/, "");
-      if (!osId) {
-        sendJson(res, 400, { ok: false, message: "ID da OS não informado." });
-        return;
-      }
-      const config = loadConfig();
-      const operatorAuth = req.authUser ? getSgpAuthFromUserPayload(req.authUser) : null;
-      try {
-        const result = await getOsDetails(config, osId, operatorAuth);
-        sendJson(res, 200, result);
-      } catch (error) {
-        sendJson(res, 500, { ok: false, message: error.message });
-      }
-      return;
-    }
+	    if (req.method === "GET" && parsedUrl.pathname.startsWith("/api/os/")) {
+	      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
+	        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
+	        return;
+	      }
+	      const osId = parsedUrl.pathname.replace("/api/os/", "").replace(/\/$/, "");
+	      if (!osId) {
+	        sendJson(res, 400, { ok: false, message: "ID da OS não informado." });
+	        return;
+	      }
+	      const config = loadConfig();
+	      try {
+	        // Para preencher a justificativa com a Observação do SGP, preferimos sempre a credencial de integração (robo)
+	        // na navegação web, evitando bloqueios/2FA que podem impedir a leitura do formulário.
+	        const result = await getOsDetails(config, osId, null);
+	        sendJson(res, 200, result);
+	      } catch (error) {
+	        sendJson(res, 500, { ok: false, message: error.message });
+	      }
+	      return;
+	    }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
       if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
