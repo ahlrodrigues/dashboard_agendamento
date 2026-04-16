@@ -484,6 +484,11 @@ function buildAuthHeaders(config) {
 }
 
 function buildSgpAuthHeaders(config, operatorAuth) {
+  // Para endpoints JSON do SGP (app+token), algumas instancias exigem o usuário de integração (robo),
+  // e retornam HTML (login/erro) quando usamos credenciais de operador.
+  if (hasAppTokenAuth(config)) {
+    return buildAuthHeaders(config);
+  }
   if (operatorAuth?.headers?.Authorization) {
     return { Authorization: operatorAuth.headers.Authorization };
   }
