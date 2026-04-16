@@ -1243,10 +1243,10 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
 	      : extractHtmlFieldValue(html, "responsavel"),
 	    conteudo: extractHtmlFieldValue(html, "conteudo"),
 	    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-	    // Observação importante (SGP) - manter o valor atual
-	    observacao: extractHtmlFieldValue(html, "observacao"),
-	    // Observação interna (SGP) - campo correto é 'anotacao'
-	    anotacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "anotacao"),
+	    // Observação (SGP) - campo correto é 'observacao'
+	    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
+	    // Observação interna (SGP) - manter o valor atual
+	    anotacao: extractHtmlFieldValue(html, "anotacao"),
 	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
 	    status: extractHtmlFieldValue(html, "status") || "0",
 	    veiculo: extractHtmlFieldValue(html, "veiculo"),
@@ -1267,7 +1267,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
-	  console.log("[updateScheduleViaSgpWebForm] Payload anotacao:", payload.anotacao);
+		  console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
   
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(payload)) {
@@ -1341,20 +1341,21 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   const expectedDate = scheduledDate;
   const expectedTime = scheduledTime;
 
-	  const buildOsUpdatePayload = (label, dateTimeValue) => {
-	    const dataAgendamentoValue = label === "br" && scheduledDateTimeBr ? scheduledDateTimeBr : dateTimeValue;
-	    const payload = {
-	      // Alguns endpoints aceitam apenas um formato/campo; enviamos variantes para maximizar compatibilidade.
-	      os_data_agendamento: dateTimeValue,
-	      data_hora_agendamento: dateTimeValue,
-	      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
-	      data_agendamento: dataAgendamentoValue,
-	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-	      // Observação interna (SGP)
-	      anotacao: observacaoForSgp,
-	      contato_nome: String(entry?.cliente || "").trim(),
-	      contato_telefone: String(entry?.telefone || "").trim()
-	    };
+		  const buildOsUpdatePayload = (label, dateTimeValue) => {
+		    const dataAgendamentoValue = label === "br" && scheduledDateTimeBr ? scheduledDateTimeBr : dateTimeValue;
+		    const payload = {
+		      // Alguns endpoints aceitam apenas um formato/campo; enviamos variantes para maximizar compatibilidade.
+		      os_data_agendamento: dateTimeValue,
+		      data_hora_agendamento: dateTimeValue,
+		      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
+		      data_agendamento: dataAgendamentoValue,
+		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+		      // Observação (SGP)
+		      observacao: observacaoForSgp,
+		      os_observacao: observacaoForSgp,
+		      contato_nome: String(entry?.cliente || "").trim(),
+		      contato_telefone: String(entry?.telefone || "").trim()
+		    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
@@ -1366,17 +1367,18 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
     return payload;
   };
 
-	  const buildCentralUpdatePayload = (dateTimeValue) => {
+		  const buildCentralUpdatePayload = (dateTimeValue) => {
     // O endpoint central costuma validar tecnico por ID em algumas instancias.
     // Para evitar "Tecnico nao localizado", nao enviamos campos de tecnico/responsavel aqui.
     // O objetivo principal e persistir data/hora do agendamento.
-	    const payload = {
-	      os_data_agendamento: dateTimeValue,
-	      data_hora_agendamento: dateTimeValue,
-	      data_agendamento: scheduledDate,
-	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-	      anotacao: observacaoForSgp
-	    };
+		    const payload = {
+		      os_data_agendamento: dateTimeValue,
+		      data_hora_agendamento: dateTimeValue,
+		      data_agendamento: scheduledDate,
+		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+		      observacao: observacaoForSgp,
+		      os_observacao: observacaoForSgp
+		    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
@@ -2179,21 +2181,35 @@ function isExternalServiceOrder(raw) {
   return normalizeOsType(raw) === "EXTERNA";
 }
 
-function isOpenServiceOrder(raw) {
+function isOpenServiceOrder(raw, allowedStatusIds = null) {
   const statusText = String(
     raw?.status_descricao ||
       raw?.status_nome ||
-    raw?.status_label ||
-    raw?.status ||
-    raw?.situacao ||
-    ""
-  ).trim().toLowerCase();
+      raw?.status_label ||
+      raw?.status ||
+      raw?.situacao ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
 
-  // Dashboard: considerar apenas OS ativas (abertas ou pendentes).
-  // Importante: os IDs de status do SGP variam por instância; aqui a regra é pelo texto.
-  if (!statusText) return false;
-  if (statusText === "aberta" || statusText === "pendente") return true;
-  return statusText.includes("aberta") || statusText.includes("pendent");
+  // Dashboard: considerar apenas OS ativas (abertas ou pendentes) pelo texto.
+  // Importante: em algumas instâncias o endpoint retorna apenas o ID do status (ex: 0/3),
+  // então precisamos aceitar os IDs consultados (statuses_consulta) como fallback.
+  if (statusText) {
+    if (statusText === "aberta" || statusText === "pendente") return true;
+    if (statusText.includes("aberta") || statusText.includes("pendent")) return true;
+  }
+
+  if (allowedStatusIds && typeof allowedStatusIds === "object") {
+    const idCandidate = raw?.status_id ?? raw?.statusId ?? raw?.status ?? raw?.situacao ?? "";
+    const idText = String(idCandidate || "").trim();
+    if (idText && /^\d+$/.test(idText) && allowedStatusIds.has(idText)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function pickClientName(raw) {
@@ -2315,7 +2331,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardCreatedBy(raw.anotacao || raw.observacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.anotacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -2812,6 +2828,12 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
 async function getDashboardData(query, authUser = null) {
   const config = loadConfig();
   const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  const openStatusIds = new Set(
+    (Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
+      ? config.agendamento.statuses_consulta
+      : DEFAULT_STATUSES
+    ).map((value) => String(value))
+  );
   const today = toLocalIsoDate(new Date());
   const selectedDate = isoDateOnly(query.get("data")) || today;
   const startDate = isoDateOnly(query.get("inicio")) || plusDays(selectedDate, -Number(config.dashboard.janela_dias_passado || 7));
@@ -2831,14 +2853,14 @@ async function getDashboardData(query, authUser = null) {
   let schedules = [];
 
   try {
-    const sgpRows = await listServiceOrders(config, { startDate, endDate }, operatorAuth);
-    schedules = sgpRows
-      .filter((item) => isExternalServiceOrder(item))
-      .filter((item) => isOpenServiceOrder(item))
-      .map((item) => normalizeSchedule(config, item, "sgp"))
-      .filter((item) => item.data);
-    schedules = await enrichSchedulesWithConfirmation(config, schedules, operatorAuth);
-    if (!schedules.length) {
+	    const sgpRows = await listServiceOrders(config, { startDate, endDate }, operatorAuth);
+	    schedules = sgpRows
+	      .filter((item) => isExternalServiceOrder(item))
+	      .filter((item) => isOpenServiceOrder(item, openStatusIds))
+	      .map((item) => normalizeSchedule(config, item, "sgp"))
+	      .filter((item) => item.data);
+	    schedules = await enrichSchedulesWithConfirmation(config, schedules, operatorAuth);
+	    if (!schedules.length) {
       sourceMode = "mock";
       notices.push("Nenhum agendamento retornado pelo SGP para o periodo consultado. Exibindo dados de demonstracao.");
       schedules = buildMockSchedules(selectedDate, slots);
@@ -3275,18 +3297,24 @@ async function findPopSlotConflicts(
   const schedules = [];
   let checkedSgp = false;
 
-  if (includeSchedules) {
-    try {
-      const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey }, operatorAuth);
-      checkedSgp = true;
-      schedules.push(
-        ...sgpRows
-          .filter((item) => isExternalServiceOrder(item))
-          .filter((item) => isOpenServiceOrder(item))
-          .map((item) => normalizeSchedule(config, item, "sgp"))
-          .filter((item) => item.data && item.horario && item.horario !== "A definir")
-      );
-    } catch (error) {
+	  if (includeSchedules) {
+	    try {
+	      const openStatusIds = new Set(
+	        (Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
+	          ? config.agendamento.statuses_consulta
+	          : DEFAULT_STATUSES
+	        ).map((value) => String(value))
+	      );
+	      const sgpRows = await listServiceOrders(config, { startDate: dateKey, endDate: dateKey }, operatorAuth);
+	      checkedSgp = true;
+	      schedules.push(
+	        ...sgpRows
+	          .filter((item) => isExternalServiceOrder(item))
+	          .filter((item) => isOpenServiceOrder(item, openStatusIds))
+	          .map((item) => normalizeSchedule(config, item, "sgp"))
+	          .filter((item) => item.data && item.horario && item.horario !== "A definir")
+	      );
+	    } catch (error) {
       checkedSgp = false;
     }
 
@@ -3695,7 +3723,7 @@ async function updateSchedule(payload, authUser = null) {
 	        const sgpPayload = {
 			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-			      anotacao: observacaoForSgp,
+			      observacao: observacaoForSgp,
 			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 			    };
 
@@ -4373,7 +4401,8 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
     const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
     const normalizedContractId = String(contractId || "").trim();
-    
+    const openStatusIds = new Set(statuses.map((value) => String(value)));
+	    
     const allRows = [];
     for (const status of statuses) {
       const payload = {
@@ -4402,7 +4431,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     if (!contractRows.length) return [];
 
     const uniqueRows = dedupeBy(
-      contractRows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row)),
+      contractRows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row, openStatusIds)),
       (row) => String(row.id || row.os_id || "")
     );
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
@@ -4422,7 +4451,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
 	        pop:             String(raw.pop || ""),
 	        responsavel:     String(raw.responsavel || ""),
 	        descritivo:      String(raw.conteudo || "").substring(0, 200),
-	        observacao:      String(raw.anotacao || raw.observacao || ""),
+	        observacao:      String(raw.observacao || raw.anotacao || ""),
 	        osUrl:           buildOsUrl(config, osId)
 	      };
 	    }).filter(x => x.osId);
