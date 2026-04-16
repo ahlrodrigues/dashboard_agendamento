@@ -1225,8 +1225,9 @@ function fillScheduleFormFromSchedule(item) {
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
   setContractLookupStatus("Agendamento carregado para edicao.", "success");
   setScheduleFormMode("edit");
-  if (String(item.origem || "").trim() === "sgp" && String(item.osId || "").trim() && form.observacao) {
-    void hydrateObservacaoFromSgpOs(item.osId, form.observacao, item.observacao || "");
+  const possibleOsId = String(item.osId || item.protocolo || "").trim();
+  if (String(item.origem || "").trim() === "sgp" && possibleOsId && form.observacao) {
+    void hydrateObservacaoFromSgpOs(possibleOsId, form.observacao, item.observacao || "");
   }
   elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
   updateSlotConflictFromForm();

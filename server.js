@@ -642,6 +642,15 @@ function extractHtmlFieldValue(html, name) {
   return "";
 }
 
+function extractSgpObservacaoValueFromHtml(html) {
+  return (
+    extractHtmlFieldValue(html, "observacao") ||
+    extractHtmlFieldValue(html, "os_observacao") ||
+    extractHtmlFieldValue(html, "observacao_os") ||
+    ""
+  );
+}
+
 function htmlFieldChecked(html, name) {
   const safeName = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const input = html.match(new RegExp(`<input[^>]*name=['"]${safeName}['"][^>]*>`, "i"));
@@ -1127,7 +1136,7 @@ async function getOsDetails(config, osId, credentials = null) {
     
     const html = form.html;
     const anotacao = extractHtmlFieldValue(html, "anotacao") || "";
-    const observacao = extractHtmlFieldValue(html, "observacao") || "";
+    const observacao = extractSgpObservacaoValueFromHtml(html) || "";
     const conteudo = extractHtmlFieldValue(html, "conteudo") || "";
     const responsavel = extractHtmlFieldValue(html, "responsavel") || "";
     const dataAgendamento = extractHtmlFieldValue(html, "data_agendamento") || "";
@@ -1226,9 +1235,11 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
         String(config.agendamento?.gateway_sms_agendamento_label || "AGENDAMENTO").trim() || "AGENDAMENTO"
       )
     : "";
-  const payload = {
-    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
-    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
+	  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
+	  const existingObservacao = extractSgpObservacaoValueFromHtml(html);
+	  const payload = {
+	    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
+	    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
     setor: extractHtmlFieldValue(html, "setor") || "1",
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
@@ -1241,12 +1252,12 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
 	    responsavel: hasMeaningfulTechnician(entry.tecnico)
 	      ? entry.tecnico
 	      : extractHtmlFieldValue(html, "responsavel"),
-	    conteudo: extractHtmlFieldValue(html, "conteudo"),
-	    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-	    // Observação (SGP) - campo correto é 'observacao'
-	    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
-	    // Observação interna (SGP) - manter o valor atual
-	    anotacao: extractHtmlFieldValue(html, "anotacao"),
+		    conteudo: extractHtmlFieldValue(html, "conteudo"),
+		    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
+		    // Observação (SGP) - campo correto é 'observacao'
+		    observacao: baseJustificativa || existingObservacao,
+		    // Observação interna (SGP) - manter o valor atual
+		    anotacao: extractHtmlFieldValue(html, "anotacao"),
 	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
 	    status: extractHtmlFieldValue(html, "status") || "0",
 	    veiculo: extractHtmlFieldValue(html, "veiculo"),
@@ -1330,7 +1341,10 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   }
 
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
-  const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
+  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
+  const observacaoForSgp = baseJustificativa
+    ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
+    : "";
   const scheduledDateTime = toScheduledDateTime(entry.data, entry.horario);
   const scheduledDateTimeBr = toBrazilDateTime(entry.data, entry.horario);
   const scheduledDate = isoDateOnly(entry.data);
@@ -1351,8 +1365,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 		      data_agendamento: dataAgendamentoValue,
 		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
 		      // Observação (SGP)
-		      observacao: observacaoForSgp,
-		      os_observacao: observacaoForSgp,
+		      ...(observacaoForSgp ? { observacao: observacaoForSgp, os_observacao: observacaoForSgp } : {}),
 		      contato_nome: String(entry?.cliente || "").trim(),
 		      contato_telefone: String(entry?.telefone || "").trim()
 		    };
@@ -1376,8 +1389,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 		      data_hora_agendamento: dateTimeValue,
 		      data_agendamento: scheduledDate,
 		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-		      observacao: observacaoForSgp,
-		      os_observacao: observacaoForSgp
+		      ...(observacaoForSgp ? { observacao: observacaoForSgp, os_observacao: observacaoForSgp } : {})
 		    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
@@ -3719,11 +3731,12 @@ async function updateSchedule(payload, authUser = null) {
 
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
-        const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
+	        const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
+	        const observacaoForSgp = baseJustificativa ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy) : "";
 	        const sgpPayload = {
 			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-			      observacao: observacaoForSgp,
+			      ...(observacaoForSgp ? { observacao: observacaoForSgp } : {}),
 			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 			    };
 
