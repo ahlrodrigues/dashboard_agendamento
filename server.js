@@ -4499,10 +4499,12 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
     const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
     const normalizedContractId = String(contractId || "").trim();
-    const openStatusIds = new Set(statuses.map((value) => String(value)));
-	    
+    const statusesTried = (Array.isArray(statuses) ? statuses : []).map((value) => Number(value)).filter((n) => Number.isFinite(n));
+    const fallbackStatuses = [0, 1, 2, 3, 4, 5].filter((n) => !statusesTried.includes(n));
+    const openStatusIds = new Set(statusesTried.concat(fallbackStatuses).map((value) => String(value)));
+		    
     const allRows = [];
-    for (const status of statuses) {
+    for (const status of statusesTried) {
       const payload = {
         status,
         limit: 10,
@@ -4516,6 +4518,27 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
         }
       } catch (err) {
         console.error("Falha ao buscar OS com status " + status + ":", err.message);
+      }
+    }
+
+    // Fallback: algumas instâncias usam IDs diferentes para "pendente/aberta".
+    // Se não vier nada, tentamos alguns status comuns adicionais e filtramos por texto via `isOpenServiceOrder`.
+    if (!allRows.length && fallbackStatuses.length) {
+      for (const status of fallbackStatuses) {
+        const payload = {
+          status,
+          limit: 10,
+          contrato: normalizedContractId
+        };
+        try {
+          const response = await postToSgp(config, endpoint, payload, operatorAuth);
+          const chunk = extractListFromResponse(response);
+          if (Array.isArray(chunk)) {
+            allRows.push(...chunk);
+          }
+        } catch (err) {
+          console.error("Falha ao buscar OS (fallback) com status " + status + ":", err.message);
+        }
       }
     }
 
