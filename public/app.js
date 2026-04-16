@@ -1207,7 +1207,18 @@ async function hydrateObservacaoFromSgpOs(osId, textareaEl, fallbackValue = "") 
   try {
     const response = await apiFetch("/api/os/" + normalizedOsId, { method: "GET" });
     if (!response.ok) {
-      throw new Error("Falha ao buscar detalhes da OS no SGP.");
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (payload?.code === "OS_CLOSED") {
+        textareaEl.value = "";
+        showToast(payload.message || "OS encerrada/fechada. Selecione uma OS aberta ou pendente.");
+        return;
+      }
+      throw new Error(payload?.message || "Falha ao buscar detalhes da OS no SGP.");
     }
     const details = await response.json();
     const text = String(details?.observacao || details?.anotacao || fallbackValue || "").trim();

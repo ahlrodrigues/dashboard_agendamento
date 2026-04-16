@@ -65,6 +65,26 @@ function hasDashboardCreatedByMetadata(text) {
   return DASHBOARD_USER_AUDIT_RE.test(raw) || DASHBOARD_USER_MARK_RE.test(raw);
 }
 
+function isClosedStatusText(value) {
+  const statusText = String(value || "").trim().toLowerCase();
+  if (!statusText) return false;
+  return (
+    statusText.includes("encerr") ||
+    statusText.includes("finaliz") ||
+    statusText.includes("conclu") ||
+    statusText.includes("fechad") ||
+    statusText.includes("cancel") ||
+    statusText.includes("baixad")
+  );
+}
+
+function isOpenStatusText(value) {
+  const statusText = String(value || "").trim().toLowerCase();
+  if (!statusText) return false;
+  if (statusText === "aberta" || statusText === "pendente") return true;
+  return statusText.includes("aberta") || statusText.includes("pendent");
+}
+
 function ensureDashboardCreatedByAudit(text, createdBy, date = new Date()) {
   const base = String(text || "").trim();
   const label = sanitizeDashboardUserLabel(createdBy);
@@ -671,6 +691,12 @@ function extractHtmlSelectOptions(html, name) {
   }));
 }
 
+function extractHtmlSelectSelectedLabel(html, name) {
+  const options = extractHtmlSelectOptions(html, name);
+  const selected = options.find((opt) => opt.selected) || null;
+  return selected ? selected.label : "";
+}
+
 function normalizePhoneDigits(value) {
   return String(value || "").replace(/\D+/g, "");
 }
@@ -1140,6 +1166,7 @@ async function getOsDetails(config, osId, credentials = null) {
     const conteudo = extractHtmlFieldValue(html, "conteudo") || "";
     const responsavel = extractHtmlFieldValue(html, "responsavel") || "";
     const dataAgendamento = extractHtmlFieldValue(html, "data_agendamento") || "";
+    const statusLabel = extractHtmlSelectSelectedLabel(html, "status");
     
     console.log("[getOsDetails] Campos extraidos - anotacao:", JSON.stringify(anotacao.substring(0, 100)));
     
@@ -1149,7 +1176,8 @@ async function getOsDetails(config, osId, credentials = null) {
       observacao,
       conteudo,
       responsavel,
-      data_agendamento: dataAgendamento
+      data_agendamento: dataAgendamento,
+      status_label: statusLabel
     };
   } catch (error) {
     // Fallback: tenta via API JSON se o formulário web falhar (ex: 2FA)
@@ -1237,14 +1265,15 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
       continue;
     }
 
-    return {
-      ok: true,
-      anotacao: resolveSgpAnotacaoFromRow(found),
-      observacao: resolveSgpObservacaoFromRow(found),
-      conteudo: String(found.conteudo || found.descritivo || ""),
-      responsavel: String(found.responsavel || ""),
-      data_agendamento: String(found.data_agendamento || "")
-    };
+	    return {
+	      ok: true,
+	      anotacao: resolveSgpAnotacaoFromRow(found),
+	      observacao: resolveSgpObservacaoFromRow(found),
+	      conteudo: String(found.conteudo || found.descritivo || ""),
+	      responsavel: String(found.responsavel || ""),
+	      data_agendamento: String(found.data_agendamento || ""),
+	      status_label: String(found.status_descricao || found.status_nome || found.status_label || "")
+	    };
   }
 
   // Fallback final: se o filtro nao for suportado pela instância, varre a lista por status para localizar a OS.
@@ -1253,14 +1282,15 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
     if (!row) {
       return null;
     }
-    return {
-      ok: true,
-      anotacao: resolveSgpAnotacaoFromRow(row),
-      observacao: resolveSgpObservacaoFromRow(row),
-      conteudo: String(row.conteudo || row.descritivo || ""),
-      responsavel: String(row.responsavel || ""),
-      data_agendamento: String(row.data_agendamento || "")
-    };
+	    return {
+	      ok: true,
+	      anotacao: resolveSgpAnotacaoFromRow(row),
+	      observacao: resolveSgpObservacaoFromRow(row),
+	      conteudo: String(row.conteudo || row.descritivo || ""),
+	      responsavel: String(row.responsavel || ""),
+	      data_agendamento: String(row.data_agendamento || ""),
+	      status_label: String(row.status_descricao || row.status_nome || row.status_label || "")
+	    };
   } catch (error) {
     return null;
   }
@@ -2252,25 +2282,15 @@ function isOpenServiceOrder(raw, allowedStatusIds = null) {
     .toLowerCase();
 
   // Sempre excluir OS encerradas/fechadas, mesmo que venham com status numérico "permitido".
-  if (statusText) {
-    if (
-      statusText.includes("encerr") ||
-      statusText.includes("finaliz") ||
-      statusText.includes("conclu") ||
-      statusText.includes("fechad") ||
-      statusText.includes("cancel") ||
-      statusText.includes("baixad")
-    ) {
-      return false;
-    }
+  if (isClosedStatusText(statusText)) {
+    return false;
   }
 
   // Dashboard: considerar apenas OS ativas (abertas ou pendentes) pelo texto.
   // Importante: em algumas instâncias o endpoint retorna apenas o ID do status (ex: 0/3),
   // então precisamos aceitar os IDs consultados (statuses_consulta) como fallback.
-  if (statusText) {
-    if (statusText === "aberta" || statusText === "pendente") return true;
-    if (statusText.includes("aberta") || statusText.includes("pendent")) return true;
+  if (isOpenStatusText(statusText)) {
+    return true;
   }
 
   if (allowedStatusIds && typeof allowedStatusIds === "object") {
@@ -4344,7 +4364,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-	    if (req.method === "GET" && parsedUrl.pathname.startsWith("/api/os/")) {
+		    if (req.method === "GET" && parsedUrl.pathname.startsWith("/api/os/")) {
 	      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
 	        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
 	        return;
@@ -4355,16 +4375,20 @@ const server = http.createServer(async (req, res) => {
 	        return;
 	      }
 	      const config = loadConfig();
-	      try {
-	        // Para preencher a justificativa com a Observação do SGP, preferimos sempre a credencial de integração (robo)
-	        // na navegação web, evitando bloqueios/2FA que podem impedir a leitura do formulário.
-	        const result = await getOsDetails(config, osId, null);
-	        sendJson(res, 200, result);
-	      } catch (error) {
-	        sendJson(res, 500, { ok: false, message: error.message });
-	      }
-	      return;
-	    }
+		      try {
+		        // Para preencher a justificativa com a Observação do SGP, preferimos sempre a credencial de integração (robo)
+		        // na navegação web, evitando bloqueios/2FA que podem impedir a leitura do formulário.
+		        const result = await getOsDetails(config, osId, null);
+		        if (isClosedStatusText(result?.status_label)) {
+		          sendJson(res, 409, { ok: false, code: "OS_CLOSED", message: "OS encerrada/fechada. Selecione uma OS aberta ou pendente." });
+		          return;
+		        }
+		        sendJson(res, 200, result);
+		      } catch (error) {
+		        sendJson(res, 500, { ok: false, message: error.message });
+		      }
+		      return;
+		    }
 
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
       if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
@@ -4510,7 +4534,39 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     );
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
 
-    return uniqueRows.slice(0, 3).map(raw => {
+    const picked = uniqueRows.slice(0, 3);
+
+    // Garantir que so retornamos OS ABERTAS/PENDENTES (por texto do formulario web) quando possivel.
+    let session = null;
+    try {
+      session = await createSgpWebSession(config, null);
+    } catch {
+      session = null;
+    }
+
+    const verified = [];
+    for (const raw of picked) {
+      if (!raw) continue;
+      const osId = String(raw.id || raw.os_id || "").trim();
+      if (!osId) continue;
+      if (session) {
+        try {
+          const form = await fetchSgpOsEditForm(config, session, osId);
+          const statusLabel = extractHtmlSelectSelectedLabel(form.html, "status");
+          if (isClosedStatusText(statusLabel)) {
+            continue;
+          }
+          if (statusLabel && !isOpenStatusText(statusLabel)) {
+            continue;
+          }
+        } catch {
+          // Se falhar a verificacao web (2FA/permissao), mantemos pelo filtro anterior.
+        }
+      }
+      verified.push(raw);
+    }
+
+    return verified.map(raw => {
       const osId = String(raw.id || raw.os_id || "");
       return {
         osId,
