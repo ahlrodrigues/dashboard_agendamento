@@ -30,4 +30,4 @@ if [[ -n "${STALE_PIDS:-}" ]]; then
   sleep 2
 fi
 
-bash "$BASE_DIR/garantir_dashboard_server.sh"
+bash "$BASE_DIR/garantir_dashboard_server.remoto.sh"

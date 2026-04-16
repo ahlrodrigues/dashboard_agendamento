@@ -79,7 +79,7 @@ function ensureDashboardCreatedByAudit(text, createdBy, date = new Date()) {
   return base ? `${base}\n${auditLine}` : auditLine;
 }
 
-const DEFAULT_STATUSES = [0, 1];
+const DEFAULT_STATUSES = [0, 3];
 const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 const DEFAULT_TIMEOUT_MS = 12000;
 const DEFAULT_SEND_INTERVAL_MS = 30000;
@@ -771,6 +771,7 @@ async function createSgpWebSession(config, credentials = null) {
   }
 
   const loginUrl = `${baseUrl}/accounts/login/`;
+  console.log("[createSgpWebSession] Buscando página de login:", loginUrl);
   const loginPage = await fetch(loginUrl, {
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
   });
@@ -780,6 +781,7 @@ async function createSgpWebSession(config, credentials = null) {
     loginPage.headers.getSetCookie?.(),
     loginPage.headers.get("set-cookie")
   );
+  console.log("[createSgpWebSession] CSRF obtido:", loginCsrf ? "sim" : "nao");
   if (!loginCsrf) {
     throw new Error("Nao foi possivel obter CSRF da tela de login do SGP.");
   }
@@ -790,6 +792,7 @@ async function createSgpWebSession(config, credentials = null) {
     password,
     next: "/"
   });
+  console.log("[createSgpWebSession] Enviando login...");
   const loginResponse = await fetch(loginUrl, {
     method: "POST",
     headers: {
@@ -802,11 +805,15 @@ async function createSgpWebSession(config, credentials = null) {
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
   });
 
+  console.log("[createSgpWebSession] Login response status:", loginResponse.status);
+  console.log("[createSgpWebSession] Login redirect to:", loginResponse.headers.get("location"));
+  
   const sessionCookies = mergeCookieHeaders(
     loginCookies,
     loginResponse.headers.getSetCookie?.(),
     loginResponse.headers.get("set-cookie")
   );
+  console.log("[createSgpWebSession] Session cookie found:", sessionCookies.includes("sessionid="));
   if (!sessionCookies.includes("sessionid=")) {
     throw new Error("Falha ao autenticar na interface web do SGP.");
   }
@@ -823,7 +830,7 @@ async function fetchSgpOsEditForm(config, session, osId) {
   const candidates = [`${basePath}edit/`, `${basePath}change/`];
 
   const timeoutMs = Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS);
-  const hasScheduleField = (html) => /name=['"]data_agendamento['"]/i.test(String(html || ""));
+  const hasScheduleField = (html) => /name=['"](?:data_agendamento|anotacao|conteudo)['"]/i.test(String(html || ""));
   const looksLikeTwoFactorPage = (html, finalUrl) => {
     const url = String(finalUrl || "").toLowerCase();
     if (url.includes("/accounts/confirm-2fa") || url.includes("/accounts/confirm_2fa")) return true;
@@ -839,8 +846,10 @@ async function fetchSgpOsEditForm(config, session, osId) {
   };
 
   let lastAttempt = null;
+  console.log("[fetchSgpOsEditForm] URLs tentadas:", candidates);
   for (const pathSuffix of candidates) {
     const url = `${baseUrl}${pathSuffix}`;
+    console.log("[fetchSgpOsEditForm] Tentando URL:", url);
     const response = await fetch(url, {
       headers: {
         Cookie: session.cookies
@@ -849,6 +858,8 @@ async function fetchSgpOsEditForm(config, session, osId) {
     });
     const html = await response.text();
     const finalUrl = response.url || url;
+
+    console.log("[fetchSgpOsEditForm] Response status:", response.status, "URL final:", finalUrl);
 
     lastAttempt = {
       url,
@@ -861,6 +872,7 @@ async function fetchSgpOsEditForm(config, session, osId) {
     };
 
     if (response.ok && hasScheduleField(html)) {
+      console.log("[fetchSgpOsEditForm] Formulário encontrado!");
       return { url, html };
     }
   }
@@ -1094,6 +1106,106 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
   return extractConfirmationDetailsFromOccurrenceHtml(session.baseUrl, html, normalizedOsId, dispatchEntry);
 }
 
+async function getOsDetails(config, osId, credentials = null) {
+  console.log("[getOsDetails] Iniciando para OS:", osId);
+  
+  // Tentativa via formulário web
+  try {
+    const session = await createSgpWebSession(config, credentials);
+    console.log("[getOsDetails] Sessão criada, buscando formulário...");
+    const form = await fetchSgpOsEditForm(config, session, osId);
+    console.log("[getOsDetails] Formulário obtido, HTML length:", form.html.length);
+    
+    const hasAnotacao = /name=['"]anotacao['"]/i.test(form.html);
+    const hasDataAgendamento = /name=['"]data_agendamento['"]/i.test(form.html);
+    console.log("[getOsDetails] HTML tem campo anotacao:", hasAnotacao, "data_agendamento:", hasDataAgendamento);
+    
+    const html = form.html;
+    const anotacao = extractHtmlFieldValue(html, "anotacao") || "";
+    const observacao = extractHtmlFieldValue(html, "observacao") || "";
+    const conteudo = extractHtmlFieldValue(html, "conteudo") || "";
+    const responsavel = extractHtmlFieldValue(html, "responsavel") || "";
+    const dataAgendamento = extractHtmlFieldValue(html, "data_agendamento") || "";
+    
+    console.log("[getOsDetails] Campos extraidos - anotacao:", JSON.stringify(anotacao.substring(0, 100)));
+    
+    return {
+      ok: true,
+      anotacao,
+      observacao,
+      conteudo,
+      responsavel,
+      data_agendamento: dataAgendamento
+    };
+  } catch (error) {
+    // Fallback: tenta via API JSON se o formulário web falhar (ex: 2FA)
+    console.log("[getOsDetails] Formulário web falhou, tentando fallback via API JSON...");
+    console.log("[getOsDetails] hasAppTokenAuth:", hasAppTokenAuth(config));
+    if (hasAppTokenAuth(config)) {
+      try {
+        const apiDetails = await getOsDetailsViaApi(config, osId, credentials);
+        console.log("[getOsDetails] Resultado do fallback API:", apiDetails);
+        if (apiDetails) {
+          console.log("[getOsDetails] Fallback API retornou dados com sucesso");
+          return apiDetails;
+        } else {
+          console.log("[getOsDetails] Fallback API retornou null");
+        }
+      } catch (apiError) {
+        console.error("[getOsDetails] Fallback API também falhou:", apiError.message);
+      }
+    } else {
+      console.log("[getOsDetails] app_token_auth não configurado, pulando fallback");
+    }
+    console.error("[getOsDetails] Erro:", error.message, error.detail || "");
+    throw error;
+  }
+}
+
+async function getOsDetailsViaApi(config, osId, credentials = null) {
+  const osIdStr = String(osId || "").trim();
+  if (!osIdStr) return null;
+  
+  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  const url = `${baseUrl}/api/ura/ordemservico/list/`;
+  
+  const bodyPayload = {
+    ...buildBasePayload(config),
+    filtro: { os_id: Number(osIdStr) }
+  };
+  
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildSgpAuthHeaders(config, credentials)
+    },
+    body: JSON.stringify(bodyPayload),
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  
+  if (!response.ok) {
+    throw new Error(`API fallback falhou: ${response.status}`);
+  }
+  
+  const data = await response.json();
+  const rows = Array.isArray(data) ? data : (data?.data || data?.rows || []);
+  
+  if (!rows || rows.length === 0) {
+    return null;
+  }
+  
+  const os = rows[0];
+  return {
+    ok: true,
+    anotacao: String(os.anotacao || os.observacao || ""),
+    observacao: String(os.observacao || os.anotacao || ""),
+    conteudo: String(os.conteudo || os.descritivo || ""),
+    responsavel: String(os.responsavel || ""),
+    data_agendamento: String(os.data_agendamento || "")
+  };
+}
+
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
   const session = await createSgpWebSession(config, credentials);
   const form = await fetchSgpOsEditForm(config, session, osId);
@@ -1126,9 +1238,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       : extractHtmlFieldValue(html, "responsavel"),
     conteudo: extractHtmlFieldValue(html, "conteudo"),
     servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-    // Observação interna (SGP)
-    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
-    anotacao: extractHtmlFieldValue(html, "anotacao"),
+    // Observação interna (SGP) - campo correto é 'anotacao'
+    anotacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "anotacao"),
     anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
     status: extractHtmlFieldValue(html, "status") || "0",
     veiculo: extractHtmlFieldValue(html, "veiculo"),
@@ -1149,6 +1260,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
+  console.log("[updateScheduleViaSgpWebForm] Payload anotacao:", payload.anotacao);
+  
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(payload)) {
     if (Array.isArray(value)) {
@@ -1230,9 +1343,8 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
       // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
       data_agendamento: dataAgendamentoValue,
       hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-      // Variantes de observacao/responsavel/prioridade variam entre instancias.
-      os_observacao: observacaoForSgp,
-      observacao: observacaoForSgp,
+      // Observação interna (SGP) - usar campo 'anotacao'
+      anotacao: observacaoForSgp,
       contato_nome: String(entry?.cliente || "").trim(),
       contato_telefone: String(entry?.telefone || "").trim()
     };
@@ -1256,8 +1368,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
       data_hora_agendamento: dateTimeValue,
       data_agendamento: scheduledDate,
       hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-      os_observacao: observacaoForSgp,
-      observacao: observacaoForSgp
+      anotacao: observacaoForSgp
     };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
@@ -2197,7 +2308,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(raw.anotacao || raw.observacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -3574,11 +3685,10 @@ async function updateSchedule(payload, authUser = null) {
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
         const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
-		    const sgpPayload = {
+        const sgpPayload = {
 		      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 		      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-		      // Observação interna (SGP)
-		      observacao: observacaoForSgp,
+		      anotacao: observacaoForSgp,
 		      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 		    };
 
@@ -4126,6 +4236,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && parsedUrl.pathname.startsWith("/api/os/")) {
+      if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
+        return;
+      }
+      const osId = parsedUrl.pathname.replace("/api/os/", "").replace(/\/$/, "");
+      if (!osId) {
+        sendJson(res, 400, { ok: false, message: "ID da OS não informado." });
+        return;
+      }
+      const config = loadConfig();
+      const operatorAuth = req.authUser ? getSgpAuthFromUserPayload(req.authUser) : null;
+      try {
+        const result = await getOsDetails(config, osId, operatorAuth);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 500, { ok: false, message: error.message });
+      }
+      return;
+    }
+
     if (req.method === "POST" && parsedUrl.pathname === "/api/agendamentos") {
       if (!req.authUser?.isAdmin && !req.authUser?.isOperator) {
         sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores e operadores." });
@@ -4284,6 +4415,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
         pop:             String(raw.pop || ""),
         responsavel:     String(raw.responsavel || ""),
         descritivo:      String(raw.conteudo || "").substring(0, 200),
+        observacao:      String(raw.anotacao || raw.observacao || ""),
         osUrl:           buildOsUrl(config, osId)
       };
     }).filter(x => x.osId);
