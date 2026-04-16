@@ -2266,7 +2266,15 @@ function normalizeOsType(raw) {
 
 function isExternalServiceOrder(raw) {
   // Regra do dashboard: considerar apenas OS do tipo EXTERNA (campo `tipo` retornado na lista do SGP).
-  return normalizeOsType(raw) === "EXTERNA";
+  const normalized = normalizeOsType(raw);
+  return normalized === "EXTERNA" || normalized.includes("EXTERNA");
+}
+
+function normalizeContractId(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D+/g, "");
+  return digits || raw;
 }
 
 function isOpenServiceOrder(raw, allowedStatusIds = null) {
@@ -4508,7 +4516,9 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
       const payload = {
         status,
         limit: 10,
-        contrato: normalizedContractId
+        contrato: normalizedContractId,
+        contrato_id: normalizedContractId,
+        id_contrato: normalizedContractId
       };
       try {
         const response = await postToSgp(config, endpoint, payload, operatorAuth);
@@ -4528,7 +4538,9 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
         const payload = {
           status,
           limit: 10,
-          contrato: normalizedContractId
+          contrato: normalizedContractId,
+          contrato_id: normalizedContractId,
+          id_contrato: normalizedContractId
         };
         try {
           const response = await postToSgp(config, endpoint, payload, operatorAuth);
@@ -4545,8 +4557,8 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     if (!allRows.length) return [];
 
     const contractRows = allRows.filter((row) => {
-      const rowContractId = String(row.contrato || row.contrato_id || row.id_contrato || "").trim();
-      return rowContractId === normalizedContractId;
+      const rowContractId = normalizeContractId(row.contrato || row.contrato_id || row.id_contrato || row.contratoId || "");
+      return rowContractId && rowContractId === normalizeContractId(normalizedContractId);
     });
 
     if (!contractRows.length) return [];
