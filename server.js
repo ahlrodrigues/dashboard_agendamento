@@ -116,6 +116,9 @@ let confirmationResendJobTimer = null;
 let confirmationResendJobRunning = false;
 
 const sgpOperatorSessions = new Map();
+const sgpWebSessionCache = new Map();
+let sgpWebBlockedUntil = 0;
+let sgpWebBlockedReason = "";
 
 const DASHBOARD_VERSION = (() => {
   try {
@@ -534,6 +537,56 @@ function hasAppTokenAuth(config) {
   );
 }
 
+function resolveSgpWebSessionTtlMs(config) {
+  const value = Number(config.dashboard?.sgp_web_session_ttl_ms);
+  if (Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  return 15 * 60 * 1000;
+}
+
+function resolveSgpWebTwoFactorBlockMs(config) {
+  const ms =
+    Number(config.dashboard?.sgp_web_2fa_block_ms) ||
+    Number(config.dashboard?.sgp_web_block_ms) ||
+    0;
+  if (Number.isFinite(ms) && ms > 0) {
+    return ms;
+  }
+  const minutes =
+    Number(config.dashboard?.sgp_web_2fa_block_minutes) ||
+    Number(config.dashboard?.sgp_web_block_minutes) ||
+    0;
+  if (Number.isFinite(minutes) && minutes > 0) {
+    return minutes * 60 * 1000;
+  }
+  return 10 * 60 * 1000;
+}
+
+function isSgpWebTemporarilyBlocked(config) {
+  return Date.now() < sgpWebBlockedUntil;
+}
+
+function markSgpWebTemporarilyBlocked(config, reason, detail = "") {
+  const blockMs = resolveSgpWebTwoFactorBlockMs(config);
+  const until = Date.now() + blockMs;
+  if (until <= sgpWebBlockedUntil) {
+    return;
+  }
+  sgpWebBlockedUntil = until;
+  sgpWebBlockedReason = String(reason || "").trim() || "unknown";
+  const minutes = Math.max(1, Math.round(blockMs / 60000));
+  console.warn(`[SGP_WEB] Bloqueado por ${minutes}min (${sgpWebBlockedReason})${detail ? `: ${detail}` : ""}`);
+}
+
+function buildSgpTwoFactorError(message, detail) {
+  const error = new Error(message || "Nao foi possivel abrir o formulario web da OS no SGP (o SGP exigiu confirmacao 2FA).");
+  if (detail) {
+    error.detail = detail;
+  }
+  return error;
+}
+
 function logSgpScheduleUpdate(stage, details) {
   try {
     console.log(`[SGP_UPDATE] ${stage} ${JSON.stringify(details)}`);
@@ -775,12 +828,18 @@ async function enqueueSgpDispatch(config, task) {
   return scheduled;
 }
 
-async function runWithConcurrencyLimit(items, limit, worker) {
+async function runWithConcurrencyLimit(items, limit, worker, shouldStop = null) {
   const queue = Array.isArray(items) ? items.slice() : [];
   const concurrency = Math.max(1, Number(limit) || 1);
   const runners = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
     while (queue.length) {
+      if (typeof shouldStop === "function" && shouldStop()) {
+        break;
+      }
       const item = queue.shift();
+      if (typeof shouldStop === "function" && shouldStop()) {
+        break;
+      }
       await worker(item);
     }
   });
@@ -803,11 +862,28 @@ function toBrazilDateTime(date, time) {
 }
 
 async function createSgpWebSession(config, credentials = null) {
+  if (isSgpWebTemporarilyBlocked(config)) {
+    const detail = sgpWebBlockedUntil
+      ? `SGP web bloqueado ate ${new Date(sgpWebBlockedUntil).toISOString()} (${sgpWebBlockedReason || "2FA"}).`
+      : "SGP web bloqueado por 2FA.";
+    throw buildSgpTwoFactorError(
+      "SGP web indisponivel no momento (bloqueado por 2FA).",
+      detail
+    );
+  }
+
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   const username = String(credentials?.username || config.basic_auth?.username || "").trim();
   const password = String(credentials?.password || config.basic_auth?.password || "").trim();
   if (!baseUrl || !username || !password) {
     throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
+  }
+
+  const sessionKey = `${baseUrl}::${username}::${password}`;
+  const cached = sgpWebSessionCache.get(sessionKey);
+  const ttlMs = resolveSgpWebSessionTtlMs(config);
+  if (cached && (Date.now() - cached.createdAt) < ttlMs) {
+    return cached.session;
   }
 
   const loginUrl = `${baseUrl}/accounts/login/`;
@@ -857,10 +933,12 @@ async function createSgpWebSession(config, credentials = null) {
   if (!sessionCookies.includes("sessionid=")) {
     throw new Error("Falha ao autenticar na interface web do SGP.");
   }
-  return {
+  const session = {
     baseUrl,
     cookies: sessionCookies
   };
+  sgpWebSessionCache.set(sessionKey, { createdAt: Date.now(), session });
+  return session;
 }
 
 async function fetchSgpOsEditForm(config, session, osId) {
@@ -918,9 +996,12 @@ async function fetchSgpOsEditForm(config, session, osId) {
   }
 
   if (lastAttempt?.twoFactorLike) {
-    const error = new Error("Nao foi possivel abrir o formulario web da OS no SGP (o SGP exigiu confirmacao 2FA).");
-    error.detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}.`;
-    throw error;
+    const detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}.`;
+    markSgpWebTemporarilyBlocked(config, "2FA_required", detail);
+    throw buildSgpTwoFactorError(
+      "Nao foi possivel abrir o formulario web da OS no SGP (o SGP exigiu confirmacao 2FA).",
+      detail
+    );
   }
 
   if (lastAttempt?.loginLike) {
@@ -1102,6 +1183,16 @@ async function fetchConfirmationDetailsForOs(config, osId, credentials = null) {
     return applyConfirmationDispatchState(cached, readConfirmationDispatchEntry(normalizedOsId));
   }
 
+  if (isSgpWebTemporarilyBlocked(config)) {
+    return applyConfirmationDispatchState({
+      confirmationUrl: "",
+      confirmationStatus: "sem_confirmacao",
+      confirmationTitle: "",
+      confirmationSent: false,
+      confirmationRequestedAt: ""
+    }, readConfirmationDispatchEntry(normalizedOsId));
+  }
+
   const session = await createSgpWebSession(config, credentials);
   const details = await fetchConfirmationDetailsForOsWithSession(config, session, normalizedOsId);
   writeConfirmationCache(normalizedOsId, details);
@@ -1149,6 +1240,27 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
 async function getOsDetails(config, osId, credentials = null) {
   console.log("[getOsDetails] Iniciando para OS:", osId);
   
+  // Preferir API (quando configurada) para reduzir hits na web/2FA.
+  if (hasAppTokenAuth(config)) {
+    try {
+      const apiDetails = await getOsDetailsViaApi(config, osId, credentials);
+      if (apiDetails) {
+        return apiDetails;
+      }
+    } catch (apiError) {
+      console.error("[getOsDetails] API fallback falhou:", apiError.message);
+    }
+  }
+
+  if (isSgpWebTemporarilyBlocked(config)) {
+    throw buildSgpTwoFactorError(
+      "Nao foi possivel obter detalhes via web do SGP (2FA ativo).",
+      sgpWebBlockedUntil
+        ? `SGP web bloqueado ate ${new Date(sgpWebBlockedUntil).toISOString()} (${sgpWebBlockedReason || "2FA"}).`
+        : "SGP web bloqueado por 2FA."
+    );
+  }
+
   // Tentativa via formulário web
   try {
     const session = await createSgpWebSession(config, credentials);
@@ -1180,25 +1292,6 @@ async function getOsDetails(config, osId, credentials = null) {
       status_label: statusLabel
     };
   } catch (error) {
-    // Fallback: tenta via API JSON se o formulário web falhar (ex: 2FA)
-    console.log("[getOsDetails] Formulário web falhou, tentando fallback via API JSON...");
-    console.log("[getOsDetails] hasAppTokenAuth:", hasAppTokenAuth(config));
-    if (hasAppTokenAuth(config)) {
-      try {
-        const apiDetails = await getOsDetailsViaApi(config, osId, credentials);
-        console.log("[getOsDetails] Resultado do fallback API:", apiDetails);
-        if (apiDetails) {
-          console.log("[getOsDetails] Fallback API retornou dados com sucesso");
-          return apiDetails;
-        } else {
-          console.log("[getOsDetails] Fallback API retornou null");
-        }
-      } catch (apiError) {
-        console.error("[getOsDetails] Fallback API também falhou:", apiError.message);
-      }
-    } else {
-      console.log("[getOsDetails] app_token_auth não configurado, pulando fallback");
-    }
     console.error("[getOsDetails] Erro:", error.message, error.detail || "");
     throw error;
   }
@@ -1207,15 +1300,6 @@ async function getOsDetails(config, osId, credentials = null) {
 async function getOsDetailsViaApi(config, osId, credentials = null) {
   const osIdStr = String(osId || "").trim();
   if (!osIdStr) return null;
-  
-  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
-  const url = `${baseUrl}/api/ura/ordemservico/list/`;
-
-  const osIdNumber = Number(osIdStr);
-  const filtros = [
-    { os_id: osIdNumber },
-    { id: osIdNumber }
-  ];
 
   const resolveSgpObservacaoFromRow = (row) => String(
     row?.observacao ||
@@ -1230,70 +1314,19 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
       ""
   );
 
-  for (const filtro of filtros) {
-    if (!Number.isFinite(Object.values(filtro)[0])) {
-      continue;
-    }
-
-    const bodyPayload = {
-      ...buildBasePayload(config),
-      filtro
-    };
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildSgpAuthHeaders(config, credentials)
-      },
-      body: JSON.stringify(bodyPayload),
-      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-    });
-
-    if (!response.ok) {
-      throw new Error(`API fallback falhou: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const rows = extractListFromResponse(data);
-    if (!Array.isArray(rows) || rows.length === 0) {
-      continue;
-    }
-
-    const found = rows.find((item) => String(item.id || item.os_id || "").trim() === osIdStr) || rows[0];
-    if (!found) {
-      continue;
-    }
-
-	    return {
-	      ok: true,
-	      anotacao: resolveSgpAnotacaoFromRow(found),
-	      observacao: resolveSgpObservacaoFromRow(found),
-	      conteudo: String(found.conteudo || found.descritivo || ""),
-	      responsavel: String(found.responsavel || ""),
-	      data_agendamento: String(found.data_agendamento || ""),
-	      status_label: String(found.status_descricao || found.status_nome || found.status_label || "")
-	    };
-  }
-
-  // Fallback final: se o filtro nao for suportado pela instância, varre a lista por status para localizar a OS.
-  try {
-    const row = await fetchServiceOrderById(config, osIdStr, credentials);
-    if (!row) {
-      return null;
-    }
-	    return {
-	      ok: true,
-	      anotacao: resolveSgpAnotacaoFromRow(row),
-	      observacao: resolveSgpObservacaoFromRow(row),
-	      conteudo: String(row.conteudo || row.descritivo || ""),
-	      responsavel: String(row.responsavel || ""),
-	      data_agendamento: String(row.data_agendamento || ""),
-	      status_label: String(row.status_descricao || row.status_nome || row.status_label || "")
-	    };
-  } catch (error) {
+  const row = await fetchServiceOrderById(config, osIdStr, credentials).catch(() => null);
+  if (!row) {
     return null;
   }
+  return {
+    ok: true,
+    anotacao: resolveSgpAnotacaoFromRow(row),
+    observacao: resolveSgpObservacaoFromRow(row),
+    conteudo: String(row.conteudo || row.descritivo || ""),
+    responsavel: String(row.responsavel || ""),
+    data_agendamento: String(row.data_agendamento || row.os_data_agendamento || row.data_hora_agendamento || ""),
+    status_label: String(row.status_descricao || row.status_nome || row.status_label || "")
+  };
 }
 
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
@@ -2902,25 +2935,53 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
     return schedules;
   }
 
-  const session = await createSgpWebSession(config, credentials);
-  await runWithConcurrencyLimit(pending, 3, async (item) => {
-    try {
-      const details = await fetchConfirmationDetailsForOsWithSession(config, session, item.osId);
-      item.confirmationUrl = details.confirmationUrl || "";
-      item.confirmationStatus = details.confirmationStatus || "sem_confirmacao";
-      item.confirmationTitle = details.confirmationTitle || "";
-      item.confirmationSent = Boolean(details.confirmationSent);
-      item.confirmationRequestedAt = details.confirmationRequestedAt || "";
-      writeConfirmationCache(item.osId, details);
-    } catch (error) {
-      const cached = readConfirmationCache(item.osId);
-      item.confirmationUrl = cached?.confirmationUrl || "";
-      item.confirmationStatus = cached?.confirmationStatus || "sem_confirmacao";
-      item.confirmationTitle = cached?.confirmationTitle || "";
-      item.confirmationSent = Boolean(cached?.confirmationSent);
-      item.confirmationRequestedAt = cached?.confirmationRequestedAt || "";
+  if (isSgpWebTemporarilyBlocked(config)) {
+    return schedules;
+  }
+
+  let session;
+  try {
+    session = await createSgpWebSession(config, credentials);
+  } catch (error) {
+    if (isSgpTwoFactorBlock(error)) {
+      markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""));
+      return schedules;
     }
-  });
+    return schedules;
+  }
+
+  const concurrency = Math.max(1, Math.min(3, Number(config.dashboard?.confirmation_fetch_concurrency || 1)));
+  let stop = false;
+  await runWithConcurrencyLimit(
+    pending,
+    concurrency,
+    async (item) => {
+      if (stop) {
+        return;
+      }
+      try {
+        const details = await fetchConfirmationDetailsForOsWithSession(config, session, item.osId);
+        item.confirmationUrl = details.confirmationUrl || "";
+        item.confirmationStatus = details.confirmationStatus || "sem_confirmacao";
+        item.confirmationTitle = details.confirmationTitle || "";
+        item.confirmationSent = Boolean(details.confirmationSent);
+        item.confirmationRequestedAt = details.confirmationRequestedAt || "";
+        writeConfirmationCache(item.osId, details);
+      } catch (error) {
+        if (isSgpTwoFactorBlock(error)) {
+          stop = true;
+          markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""));
+        }
+        const cached = readConfirmationCache(item.osId);
+        item.confirmationUrl = cached?.confirmationUrl || "";
+        item.confirmationStatus = cached?.confirmationStatus || "sem_confirmacao";
+        item.confirmationTitle = cached?.confirmationTitle || "";
+        item.confirmationSent = Boolean(cached?.confirmationSent);
+        item.confirmationRequestedAt = cached?.confirmationRequestedAt || "";
+      }
+    },
+    () => stop
+  );
 
   return schedules;
 }
