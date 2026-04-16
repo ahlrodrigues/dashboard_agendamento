@@ -1233,15 +1233,15 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       : existingScheduleValue,
     data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
     data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
-    responsavel: hasMeaningfulTechnician(entry.tecnico)
-      ? entry.tecnico
-      : extractHtmlFieldValue(html, "responsavel"),
+	    responsavel: hasMeaningfulTechnician(entry.tecnico)
+	      ? entry.tecnico
+	      : extractHtmlFieldValue(html, "responsavel"),
 	    conteudo: extractHtmlFieldValue(html, "conteudo"),
 	    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-	    // Observação importante (SGP) - campo correto é 'observacao'
-	    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
-	    // Anotação interna (SGP) - manter o valor atual
-	    anotacao: extractHtmlFieldValue(html, "anotacao"),
+	    // Observação importante (SGP) - manter o valor atual
+	    observacao: extractHtmlFieldValue(html, "observacao"),
+	    // Observação interna (SGP) - campo correto é 'anotacao'
+	    anotacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "anotacao"),
 	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
 	    status: extractHtmlFieldValue(html, "status") || "0",
 	    veiculo: extractHtmlFieldValue(html, "veiculo"),
@@ -1262,7 +1262,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
-	  console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
+	  console.log("[updateScheduleViaSgpWebForm] Payload anotacao:", payload.anotacao);
   
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(payload)) {
@@ -1345,9 +1345,8 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 	      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
 	      data_agendamento: dataAgendamentoValue,
 	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-	      // Observação importante (SGP)
-	      observacao: observacaoForSgp,
-	      os_observacao: observacaoForSgp,
+	      // Observação interna (SGP)
+	      anotacao: observacaoForSgp,
 	      contato_nome: String(entry?.cliente || "").trim(),
 	      contato_telefone: String(entry?.telefone || "").trim()
 	    };
@@ -1371,8 +1370,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 	      data_hora_agendamento: dateTimeValue,
 	      data_agendamento: scheduledDate,
 	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-	      observacao: observacaoForSgp,
-	      os_observacao: observacaoForSgp
+	      anotacao: observacaoForSgp
 	    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
@@ -2312,7 +2310,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.anotacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(raw.anotacao || raw.observacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -3692,7 +3690,7 @@ async function updateSchedule(payload, authUser = null) {
 	        const sgpPayload = {
 			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-			      observacao: observacaoForSgp,
+			      anotacao: observacaoForSgp,
 			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 			    };
 
@@ -4419,7 +4417,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
 	        pop:             String(raw.pop || ""),
 	        responsavel:     String(raw.responsavel || ""),
 	        descritivo:      String(raw.conteudo || "").substring(0, 200),
-	        observacao:      String(raw.observacao || raw.anotacao || ""),
+	        observacao:      String(raw.anotacao || raw.observacao || ""),
 	        osUrl:           buildOsUrl(config, osId)
 	      };
 	    }).filter(x => x.osId);

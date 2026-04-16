@@ -2072,9 +2072,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
 	          const response = await apiFetch("/api/os/" + os.osId, { method: "GET" });
 	          if (response.ok) {
 	            const details = await response.json();
-	            // Observação importante (SGP) → campo Justificativa do dash
+	            // Observação interna (SGP) → campo Justificativa do dash
 	            if (f.observacao) {
-	              f.observacao.value = details.observacao || details.anotacao || "";
+	              f.observacao.value = details.anotacao || details.observacao || "";
 	            }
 	          }
 	        } catch (err) {

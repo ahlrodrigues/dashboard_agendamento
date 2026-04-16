@@ -8,7 +8,21 @@ cd "$BASE_DIR"
 LOG_FILE="${DASHBOARD_LOG_FILE:-$BASE_DIR/dashboard_server.log}"
 PID_FILE="${DASHBOARD_PID_FILE:-$BASE_DIR/dashboard_server.pid}"
 SERVER_SCRIPT="${DASHBOARD_SERVER_SCRIPT:-$BASE_DIR/server.js}"
-NODE_BIN="${DASHBOARD_NODE_BIN:-node}"
+NODE_BIN="${DASHBOARD_NODE_BIN:-}"
+
+if [[ -z "$NODE_BIN" ]]; then
+  for candidate in "$(command -v node 2>/dev/null || true)" /usr/bin/node /usr/local/bin/node /bin/node; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      NODE_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$NODE_BIN" || ! -x "$NODE_BIN" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Node nao encontrado." >&2
+  exit 1
+fi
 
 if [[ -f "$PID_FILE" ]]; then
   OLD_PID="$(cat "$PID_FILE" || true)"
@@ -20,7 +34,7 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-STALE_PIDS="$(pgrep -f "$NODE_BIN $SERVER_SCRIPT" || true)"
+STALE_PIDS="$(pgrep -f "$SERVER_SCRIPT" || true)"
 if [[ -n "${STALE_PIDS:-}" ]]; then
   while IFS= read -r pid; do
     [[ -z "${pid:-}" ]] && continue
