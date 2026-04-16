@@ -2067,17 +2067,17 @@ function fillScheduleFormFromContract(contract, openOses = []) {
           setFormTurno(elements.scheduleForm, inferTurnoFromTime(referenceTime));
         }
 
-        // Busca detalhes da OS (inclui anotacao - Observação Interna) via API do SGP
-        try {
-          const response = await apiFetch("/api/os/" + os.osId, { method: "GET" });
-          if (response.ok) {
-            const details = await response.json();
-            // Observação Interna → campo Justificativa do dash
-            if (f.observacao) {
-              f.observacao.value = details.anotacao || details.observacao || "";
-            }
-          }
-        } catch (err) {
+	        // Busca detalhes da OS via API do SGP (observacao/anotacao)
+	        try {
+	          const response = await apiFetch("/api/os/" + os.osId, { method: "GET" });
+	          if (response.ok) {
+	            const details = await response.json();
+	            // Observação importante (SGP) → campo Justificativa do dash
+	            if (f.observacao) {
+	              f.observacao.value = details.observacao || details.anotacao || "";
+	            }
+	          }
+	        } catch (err) {
           console.error("Erro ao buscar detalhes da OS:", err);
           // Fallback: usa o valor da lista
           if (f.observacao) {

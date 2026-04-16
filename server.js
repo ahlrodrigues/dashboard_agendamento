@@ -1166,91 +1166,45 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
   const osIdStr = String(osId || "").trim();
   if (!osIdStr) return null;
   
-  console.log("[getOsDetailsViaApi] Tentando buscar OS:", osIdStr);
-  
-  // Primeiro tenta o endpoint da lista com filtro por ID
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
+  const url = `${baseUrl}/api/ura/ordemservico/list/`;
   
-  // Tentativa 1: /api/ura/ordemservico/list/ com filtro id
-  try {
-    const listUrl = `${baseUrl}/api/ura/ordemservico/list/`;
-    const bodyPayload = {
-      ...buildBasePayload(config),
-      filtro: { id: Number(osIdStr) }
-    };
-    
-    console.log("[getOsDetailsViaApi] Tentando endpoint de lista:", listUrl);
-    
-    const response = await fetch(listUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildSgpAuthHeaders(config, credentials)
-      },
-      body: JSON.stringify(bodyPayload),
-      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-    });
-    
-    if (!response.ok) {
-      throw new Error(`API lista falhou: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    console.log("[getOsDetailsViaApi] Resposta da lista:", JSON.stringify(data).substring(0, 500));
-    
-    // O endpoint /api/ura/ordemservico/list/ retorna { ordens_servicos: [...] }
-    const osList = data?.ordens_servicos || data?.data || data?.rows || [];
-    
-    if (osList && osList.length > 0) {
-      const os = osList[0];
-      console.log("[getOsDetailsViaApi] OS encontrada na lista:", os.id, "anotacao:", os.anotacao, "motivo:", os.motivo);
-      
-      return {
-        ok: true,
-        anotacao: String(os.anotacao || os.observacao || ""),
-        observacao: String(os.observacao || os.anotacao || ""),
-        conteudo: String(os.conteudo || os.descritivo || ""),
-        responsavel: String(os.responsavel || ""),
-        data_agendamento: String(os.data_agendamento || "")
-      };
-    }
-  } catch (err) {
-    console.error("[getOsDetailsViaApi] Erro na lista:", err.message);
+  const bodyPayload = {
+    ...buildBasePayload(config),
+    filtro: { os_id: Number(osIdStr) }
+  };
+  
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildSgpAuthHeaders(config, credentials)
+    },
+    body: JSON.stringify(bodyPayload),
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  
+  if (!response.ok) {
+    throw new Error(`API fallback falhou: ${response.status}`);
   }
   
-  // Tentativa 2: tentar endpoint direto /api/os/{id} se existir
-  try {
-    const osUrl = `${baseUrl}/api/os/${osIdStr}/`;
-    console.log("[getOsDetailsViaApi] Tentando endpoint direto:", osUrl);
-    
-    const response = await fetch(osUrl, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildSgpAuthHeaders(config, credentials)
-      },
-      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-    });
-    
-    if (response.ok) {
-      const os = await response.json();
-      console.log("[getOsDetailsViaApi] OS direta:", os.id, "anotacao:", os.anotacao);
-      
-      return {
-        ok: true,
-        anotacao: String(os.anotacao || os.observacao || ""),
-        observacao: String(os.observacao || os.anotacao || ""),
-        conteudo: String(os.conteudo || os.descricao || ""),
-        responsavel: String(os.responsavel || ""),
-        data_agendamento: String(os.data_agendamento || "")
-      };
-    }
-  } catch (err) {
-    console.error("[getOsDetailsViaApi] Erro no endpoint direto:", err.message);
+  const data = await response.json();
+  const rows = Array.isArray(data) ? data : (data?.data || data?.rows || []);
+  
+  if (!rows || rows.length === 0) {
+    return null;
   }
   
-  console.log("[getOsDetailsViaApi] Nenhum dado encontrado");
-  return null;
+  const os = rows[0];
+  return {
+    ok: true,
+    anotacao: String(os.anotacao || ""),
+    observacao: String(os.observacao || ""),
+    conteudo: String(os.conteudo || os.descritivo || ""),
+    responsavel: String(os.responsavel || ""),
+    data_agendamento: String(os.data_agendamento || "")
+  };
+}
 
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
   const session = await createSgpWebSession(config, credentials);
@@ -1282,15 +1236,17 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     responsavel: hasMeaningfulTechnician(entry.tecnico)
       ? entry.tecnico
       : extractHtmlFieldValue(html, "responsavel"),
-    conteudo: extractHtmlFieldValue(html, "conteudo"),
-    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-    // Observação interna (SGP) - campo correto é 'anotacao'
-    anotacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "anotacao"),
-    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
-    status: extractHtmlFieldValue(html, "status") || "0",
-    veiculo: extractHtmlFieldValue(html, "veiculo"),
-    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
-    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
+	    conteudo: extractHtmlFieldValue(html, "conteudo"),
+	    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
+	    // Observação importante (SGP) - campo correto é 'observacao'
+	    observacao: entry.justificativa || entry.observacao || extractHtmlFieldValue(html, "observacao"),
+	    // Anotação interna (SGP) - manter o valor atual
+	    anotacao: extractHtmlFieldValue(html, "anotacao"),
+	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
+	    status: extractHtmlFieldValue(html, "status") || "0",
+	    veiculo: extractHtmlFieldValue(html, "veiculo"),
+	    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
+	    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
     data_checkin: extractHtmlFieldValue(html, "data_checkin"),
     ...(shouldRequestConfirmation && (gatewayValue || extractHtmlFieldValue(html, "gateway_sms"))
       ? { gateway_sms: gatewayValue || extractHtmlFieldValue(html, "gateway_sms") }
@@ -1306,7 +1262,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
-  console.log("[updateScheduleViaSgpWebForm] Payload anotacao:", payload.anotacao);
+	  console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
   
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(payload)) {
@@ -1380,20 +1336,21 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   const expectedDate = scheduledDate;
   const expectedTime = scheduledTime;
 
-  const buildOsUpdatePayload = (label, dateTimeValue) => {
-    const dataAgendamentoValue = label === "br" && scheduledDateTimeBr ? scheduledDateTimeBr : dateTimeValue;
-    const payload = {
-      // Alguns endpoints aceitam apenas um formato/campo; enviamos variantes para maximizar compatibilidade.
-      os_data_agendamento: dateTimeValue,
-      data_hora_agendamento: dateTimeValue,
-      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
-      data_agendamento: dataAgendamentoValue,
-      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-      // Observação interna (SGP) - usar campo 'anotacao'
-      anotacao: observacaoForSgp,
-      contato_nome: String(entry?.cliente || "").trim(),
-      contato_telefone: String(entry?.telefone || "").trim()
-    };
+	  const buildOsUpdatePayload = (label, dateTimeValue) => {
+	    const dataAgendamentoValue = label === "br" && scheduledDateTimeBr ? scheduledDateTimeBr : dateTimeValue;
+	    const payload = {
+	      // Alguns endpoints aceitam apenas um formato/campo; enviamos variantes para maximizar compatibilidade.
+	      os_data_agendamento: dateTimeValue,
+	      data_hora_agendamento: dateTimeValue,
+	      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
+	      data_agendamento: dataAgendamentoValue,
+	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+	      // Observação importante (SGP)
+	      observacao: observacaoForSgp,
+	      os_observacao: observacaoForSgp,
+	      contato_nome: String(entry?.cliente || "").trim(),
+	      contato_telefone: String(entry?.telefone || "").trim()
+	    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
@@ -1405,17 +1362,18 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
     return payload;
   };
 
-  const buildCentralUpdatePayload = (dateTimeValue) => {
+	  const buildCentralUpdatePayload = (dateTimeValue) => {
     // O endpoint central costuma validar tecnico por ID em algumas instancias.
     // Para evitar "Tecnico nao localizado", nao enviamos campos de tecnico/responsavel aqui.
     // O objetivo principal e persistir data/hora do agendamento.
-    const payload = {
-      os_data_agendamento: dateTimeValue,
-      data_hora_agendamento: dateTimeValue,
-      data_agendamento: scheduledDate,
-      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-      anotacao: observacaoForSgp
-    };
+	    const payload = {
+	      os_data_agendamento: dateTimeValue,
+	      data_hora_agendamento: dateTimeValue,
+	      data_agendamento: scheduledDate,
+	      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
+	      observacao: observacaoForSgp,
+	      os_observacao: observacaoForSgp
+	    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
@@ -2354,7 +2312,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardCreatedBy(raw.anotacao || raw.observacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.anotacao || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
@@ -3032,7 +2990,7 @@ function buildCreateCallPayload(config, entry) {
   const payload = {
     contrato: entry.contrato,
     conteudo: content,
-    // Observação interna (SGP)
+    // Observação importante (SGP)
     observacao: entry.justificativa || entry.observacao || "",
     ocorrenciatipo: Number(config.agendamento?.ocorrencia_tipo_padrao || 5),
     motivoos: Number(config.agendamento?.motivo_os_padrao || 1),
@@ -3731,12 +3689,12 @@ async function updateSchedule(payload, authUser = null) {
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
         const observacaoForSgp = ensureDashboardCreatedByAudit(entry.justificativa || entry.observacao || "", entry.createdBy);
-        const sgpPayload = {
-		      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
-		      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-		      anotacao: observacaoForSgp,
-		      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
-		    };
+	        const sgpPayload = {
+			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
+			      observacao: observacaoForSgp,
+			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
+			    };
 
     logSgpScheduleUpdate("request", { osId, endpoint, payload: sgpPayload });
 
@@ -4458,13 +4416,13 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
         data_agendamento: String(raw.data_agendamento || ""),
         hora_agendamento: String(raw.hora_agendamento || ""),
         status:          String(raw.status || ""),
-        pop:             String(raw.pop || ""),
-        responsavel:     String(raw.responsavel || ""),
-        descritivo:      String(raw.conteudo || "").substring(0, 200),
-        observacao:      String(raw.anotacao || raw.observacao || ""),
-        osUrl:           buildOsUrl(config, osId)
-      };
-    }).filter(x => x.osId);
+	        pop:             String(raw.pop || ""),
+	        responsavel:     String(raw.responsavel || ""),
+	        descritivo:      String(raw.conteudo || "").substring(0, 200),
+	        observacao:      String(raw.observacao || raw.anotacao || ""),
+	        osUrl:           buildOsUrl(config, osId)
+	      };
+	    }).filter(x => x.osId);
   } catch (error) {
     console.error("Falha ao organizar OS abertas/pendentes:", error.message);
     return [];
