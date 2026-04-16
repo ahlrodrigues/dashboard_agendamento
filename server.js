@@ -2251,6 +2251,20 @@ function isOpenServiceOrder(raw, allowedStatusIds = null) {
     .trim()
     .toLowerCase();
 
+  // Sempre excluir OS encerradas/fechadas, mesmo que venham com status numérico "permitido".
+  if (statusText) {
+    if (
+      statusText.includes("encerr") ||
+      statusText.includes("finaliz") ||
+      statusText.includes("conclu") ||
+      statusText.includes("fechad") ||
+      statusText.includes("cancel") ||
+      statusText.includes("baixad")
+    ) {
+      return false;
+    }
+  }
+
   // Dashboard: considerar apenas OS ativas (abertas ou pendentes) pelo texto.
   // Importante: em algumas instâncias o endpoint retorna apenas o ID do status (ex: 0/3),
   // então precisamos aceitar os IDs consultados (statuses_consulta) como fallback.

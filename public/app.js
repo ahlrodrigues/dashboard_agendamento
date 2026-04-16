@@ -1082,12 +1082,25 @@ function updateSelectionControls() {
 }
 
 function canDeleteSchedule(item) {
-  const canDelete = !!(!state.isAdmin && !state.isOperator ? false : (item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId)));
+  const sgpStatus = String(item?.sgpStatus || "").trim().toLowerCase();
+  const isClosedSgp = sgpStatus
+    ? (sgpStatus.includes("encerr") ||
+        sgpStatus.includes("finaliz") ||
+        sgpStatus.includes("conclu") ||
+        sgpStatus.includes("fechad") ||
+        sgpStatus.includes("cancel") ||
+        sgpStatus.includes("baixad"))
+    : false;
+  const canDelete = !!(
+    (!state.isAdmin && !state.isOperator)
+      ? false
+      : (item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId && !isClosedSgp))
+  );
   console.log("canDeleteSchedule - isAdmin:", state.isAdmin, "isOperator:", state.isOperator, "origem:", item.origem, "osId:", item.osId, "canDelete:", canDelete);
   if (!state.isAdmin && !state.isOperator) {
     return false;
   }
-  return item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId);
+  return item.origem === "pre_agendamento_local" || (item.origem === "sgp" && item.osId && !isClosedSgp);
 }
 
 function getDisplayTechnicianName(value) {
@@ -1226,7 +1239,16 @@ function fillScheduleFormFromSchedule(item) {
   setContractLookupStatus("Agendamento carregado para edicao.", "success");
   setScheduleFormMode("edit");
   const possibleOsId = String(item.osId || item.protocolo || "").trim();
-  if (String(item.origem || "").trim() === "sgp" && possibleOsId && form.observacao) {
+  const sgpStatus = String(item?.sgpStatus || "").trim().toLowerCase();
+  const isClosedSgp = sgpStatus
+    ? (sgpStatus.includes("encerr") ||
+        sgpStatus.includes("finaliz") ||
+        sgpStatus.includes("conclu") ||
+        sgpStatus.includes("fechad") ||
+        sgpStatus.includes("cancel") ||
+        sgpStatus.includes("baixad"))
+    : false;
+  if (String(item.origem || "").trim() === "sgp" && possibleOsId && form.observacao && !isClosedSgp) {
     void hydrateObservacaoFromSgpOs(possibleOsId, form.observacao, item.observacao || "");
   }
   elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
