@@ -1185,6 +1185,28 @@ function setScheduleFormMode(mode) {
   }
 }
 
+async function hydrateObservacaoFromSgpOs(osId, textareaEl, fallbackValue = "") {
+  const normalizedOsId = String(osId || "").trim();
+  if (!normalizedOsId || !textareaEl) {
+    return;
+  }
+
+  try {
+    const response = await apiFetch("/api/os/" + normalizedOsId, { method: "GET" });
+    if (!response.ok) {
+      throw new Error("Falha ao buscar detalhes da OS no SGP.");
+    }
+    const details = await response.json();
+    const text = String(details?.observacao || details?.anotacao || fallbackValue || "").trim();
+    textareaEl.value = text;
+  } catch (error) {
+    const text = String(fallbackValue || "").trim();
+    if (text) {
+      textareaEl.value = text;
+    }
+  }
+}
+
 function fillScheduleFormFromSchedule(item) {
   const form = elements.scheduleForm.elements;
   form.id.value = item.id || "";
@@ -1203,6 +1225,9 @@ function fillScheduleFormFromSchedule(item) {
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
   setContractLookupStatus("Agendamento carregado para edicao.", "success");
   setScheduleFormMode("edit");
+  if (String(item.origem || "").trim() === "sgp" && String(item.osId || "").trim() && form.observacao) {
+    void hydrateObservacaoFromSgpOs(item.osId, form.observacao, item.observacao || "");
+  }
   elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
   updateSlotConflictFromForm();
 }
@@ -2067,23 +2092,9 @@ function fillScheduleFormFromContract(contract, openOses = []) {
           setFormTurno(elements.scheduleForm, inferTurnoFromTime(referenceTime));
         }
 
-	        // Busca detalhes da OS via API do SGP (observacao/anotacao)
-	        try {
-	          const response = await apiFetch("/api/os/" + os.osId, { method: "GET" });
-	          if (response.ok) {
-	            const details = await response.json();
-	            // Observação (SGP) → campo Justificativa do dash
-	            if (f.observacao) {
-	              f.observacao.value = details.observacao || details.anotacao || "";
-	            }
-	          }
-	        } catch (err) {
-          console.error("Erro ao buscar detalhes da OS:", err);
-          // Fallback: usa o valor da lista
-          if (f.observacao) {
-            f.observacao.value = os.observacao || "";
-          }
-        }
+	        if (f.observacao) {
+	          void hydrateObservacaoFromSgpOs(os.osId, f.observacao, os.observacao || "");
+	        }
 
         // Destaca o card selecionado
         document.querySelectorAll(".os-suggestion-item").forEach(el => {
