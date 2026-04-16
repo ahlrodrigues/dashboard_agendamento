@@ -1182,42 +1182,59 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
   
   const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
   const url = `${baseUrl}/api/ura/ordemservico/list/`;
-  
-  const bodyPayload = {
-    ...buildBasePayload(config),
-    filtro: { os_id: Number(osIdStr) }
-  };
-  
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...buildSgpAuthHeaders(config, credentials)
-    },
-    body: JSON.stringify(bodyPayload),
-    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-  });
-  
-  if (!response.ok) {
-    throw new Error(`API fallback falhou: ${response.status}`);
+
+  const osIdNumber = Number(osIdStr);
+  const filtros = [
+    { os_id: osIdNumber },
+    { id: osIdNumber }
+  ];
+
+  for (const filtro of filtros) {
+    if (!Number.isFinite(Object.values(filtro)[0])) {
+      continue;
+    }
+
+    const bodyPayload = {
+      ...buildBasePayload(config),
+      filtro
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...buildSgpAuthHeaders(config, credentials)
+      },
+      body: JSON.stringify(bodyPayload),
+      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+    });
+
+    if (!response.ok) {
+      throw new Error(`API fallback falhou: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rows = extractListFromResponse(data);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      continue;
+    }
+
+    const found = rows.find((item) => String(item.id || item.os_id || "").trim() === osIdStr) || rows[0];
+    if (!found) {
+      continue;
+    }
+
+    return {
+      ok: true,
+      anotacao: String(found.anotacao || ""),
+      observacao: String(found.observacao || ""),
+      conteudo: String(found.conteudo || found.descritivo || ""),
+      responsavel: String(found.responsavel || ""),
+      data_agendamento: String(found.data_agendamento || "")
+    };
   }
-  
-  const data = await response.json();
-  const rows = Array.isArray(data) ? data : (data?.data || data?.rows || []);
-  
-  if (!rows || rows.length === 0) {
-    return null;
-  }
-  
-  const os = rows[0];
-  return {
-    ok: true,
-    anotacao: String(os.anotacao || ""),
-    observacao: String(os.observacao || ""),
-    conteudo: String(os.conteudo || os.descritivo || ""),
-    responsavel: String(os.responsavel || ""),
-    data_agendamento: String(os.data_agendamento || "")
-  };
+
+  return null;
 }
 
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
