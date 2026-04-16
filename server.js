@@ -1189,6 +1189,19 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
     { id: osIdNumber }
   ];
 
+  const resolveSgpObservacaoFromRow = (row) => String(
+    row?.observacao ||
+      row?.os_observacao ||
+      row?.observacao_os ||
+      ""
+  );
+
+  const resolveSgpAnotacaoFromRow = (row) => String(
+    row?.anotacao ||
+      row?.os_anotacao ||
+      ""
+  );
+
   for (const filtro of filtros) {
     if (!Number.isFinite(Object.values(filtro)[0])) {
       continue;
@@ -1226,15 +1239,31 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
 
     return {
       ok: true,
-      anotacao: String(found.anotacao || ""),
-      observacao: String(found.observacao || ""),
+      anotacao: resolveSgpAnotacaoFromRow(found),
+      observacao: resolveSgpObservacaoFromRow(found),
       conteudo: String(found.conteudo || found.descritivo || ""),
       responsavel: String(found.responsavel || ""),
       data_agendamento: String(found.data_agendamento || "")
     };
   }
 
-  return null;
+  // Fallback final: se o filtro nao for suportado pela instância, varre a lista por status para localizar a OS.
+  try {
+    const row = await fetchServiceOrderById(config, osIdStr, credentials);
+    if (!row) {
+      return null;
+    }
+    return {
+      ok: true,
+      anotacao: resolveSgpAnotacaoFromRow(row),
+      observacao: resolveSgpObservacaoFromRow(row),
+      conteudo: String(row.conteudo || row.descritivo || ""),
+      responsavel: String(row.responsavel || ""),
+      data_agendamento: String(row.data_agendamento || "")
+    };
+  } catch (error) {
+    return null;
+  }
 }
 
 async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = null) {
