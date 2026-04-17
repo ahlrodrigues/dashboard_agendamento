@@ -1,6 +1,6 @@
 {
   "name": "dashboard-agendamento-sgp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Dashboard de agendamentos integrado ao SGP para uso pelo Call Center.",
   "main": "server.js",

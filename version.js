@@ -32,9 +32,9 @@ function getGitCommitShort() {
 function getDashboardVersionLabel() {
   const commit = getGitCommitShort();
   if (!commit) {
-    return `V${VERSION}`;
+    return `${VERSION}`;
   }
-  return `V${VERSION} (${commit})`;
+  return `${VERSION} (${commit})`;
 }
 
 module.exports = {
@@ -42,4 +42,3 @@ module.exports = {
   getGitCommitShort,
   getDashboardVersionLabel
 };
-

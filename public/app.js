@@ -52,6 +52,7 @@ const elements = {
   weekRange: document.querySelector("#weekRange"),
   sourceBadge: document.querySelector("#sourceBadge"),
   snapshotLabel: document.querySelector("#snapshotLabel"),
+  footerVersion: document.querySelector("#footerVersion"),
   writeModeBadge: document.querySelector("#writeModeBadge"),
   noticeArea: document.querySelector("#noticeArea"),
   scheduleForm: document.querySelector("#scheduleForm"),
@@ -1330,10 +1331,12 @@ function renderTable(rows) {
 
 function updateMeta(data) {
   const rawVersion = String(data.dashboardVersion || data.version || "").trim();
-  const versionLabel = rawVersion ? `v${rawVersion.replace(/^[vV]+/, "")}` : "";
-  elements.snapshotLabel.innerHTML = versionLabel
-    ? `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}<br /><span class="dash-version">Versao ${escapeHtml(versionLabel)}</span>`
-    : `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}`;
+  const versionLabel = rawVersion ? rawVersion.replace(/^[vV]+/, "") : "";
+  elements.snapshotLabel.innerHTML = `Atualizado em ${escapeHtml(formatDateTime(data.generatedAt))}`;
+  if (elements.footerVersion) {
+    elements.footerVersion.textContent = versionLabel ? `Versao: ${versionLabel}` : "Versao: -";
+    elements.footerVersion.style.display = "";
+  }
   elements.sourceBadge.className = `badge ${badgeClassForSource(data.sourceMode)}`;
   elements.sourceBadge.textContent = sourceLabel(data.sourceMode);
   elements.weekRange.textContent = `${formatDate(data.period.weekStart)} ate ${formatDate(data.period.weekEnd)}`;
