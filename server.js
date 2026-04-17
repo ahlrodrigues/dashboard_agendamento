@@ -2311,6 +2311,12 @@ function normalizeContractId(value) {
 }
 
 function isOpenServiceOrder(raw, allowedStatusIds = null) {
+  if (allowedStatusIds && typeof allowedStatusIds === "object") {
+    const idCandidate = raw?.status_id ?? raw?.statusId ?? raw?.status ?? raw?.situacao ?? "";
+    const idText = String(idCandidate || "").trim();
+    return Boolean(idText && /^\d+$/.test(idText) && allowedStatusIds.has(idText));
+  }
+
   const statusText = String(
     raw?.status_descricao ||
       raw?.status_nome ||
@@ -2322,27 +2328,9 @@ function isOpenServiceOrder(raw, allowedStatusIds = null) {
     .trim()
     .toLowerCase();
 
-  // Sempre excluir OS encerradas/fechadas, mesmo que venham com status numérico "permitido".
-  if (isClosedStatusText(statusText)) {
-    return false;
-  }
-
-  // Dashboard: considerar apenas OS ativas (abertas ou pendentes) pelo texto.
-  // Importante: em algumas instâncias o endpoint retorna apenas o ID do status (ex: 0/3),
-  // então precisamos aceitar os IDs consultados (statuses_consulta) como fallback.
-  if (isOpenStatusText(statusText)) {
-    return true;
-  }
-
-  if (allowedStatusIds && typeof allowedStatusIds === "object") {
-    const idCandidate = raw?.status_id ?? raw?.statusId ?? raw?.status ?? raw?.situacao ?? "";
-    const idText = String(idCandidate || "").trim();
-    if (idText && /^\d+$/.test(idText) && allowedStatusIds.has(idText)) {
-      return true;
-    }
-  }
-
-  return false;
+  if (!statusText) return false;
+  if (isClosedStatusText(statusText)) return false;
+  return isOpenStatusText(statusText);
 }
 
 function pickClientName(raw) {
@@ -4053,20 +4041,24 @@ async function getContractData(contractId, authUser = null) {
       }
     };
   }
-  const [contract, openOses] = await Promise.all([
-    lookupContract(config, normalizedContractId, operatorAuth),
-    lookupOpenOsForContract(config, normalizedContractId, operatorAuth).catch(err => {
-      console.error("OS lookup falhou (nao critico):", err.message);
-      return [];
-    })
-  ]);
+  const contract = await lookupContract(config, normalizedContractId, operatorAuth);
+  let openOses = [];
+  let openOsesError = "";
+  try {
+    openOses = await lookupOpenOsForContract(config, normalizedContractId, operatorAuth);
+  } catch (err) {
+    openOsesError = String(err?.message || err || "");
+    console.error("OS lookup falhou (nao critico):", openOsesError);
+    openOses = [];
+  }
 
   return {
     statusCode: 200,
     body: {
       ok: true,
       contract,
-      openOses
+      openOses,
+      ...(openOsesError ? { openOsesError } : {})
     }
   };
 }
@@ -4571,7 +4563,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     const statusesTried = (Array.isArray(statuses) ? statuses : []).map((value) => Number(value)).filter((n) => Number.isFinite(n));
     const fallbackStatuses = [0, 1, 2, 3, 4, 5].filter((n) => !statusesTried.includes(n));
     const openStatusIds = new Set(statusesTried.concat(fallbackStatuses).map((value) => String(value)));
-		    
+			    
     const allRows = [];
     for (const status of statusesTried) {
       const payload = {
@@ -4593,8 +4585,9 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     }
 
     // Fallback: algumas instâncias usam IDs diferentes para "pendente/aberta".
-    // Se não vier nada, tentamos alguns status comuns adicionais e filtramos por texto via `isOpenServiceOrder`.
-    if (!allRows.length && fallbackStatuses.length) {
+    // Se a lista inicial não trouxer OS abertas/pendentes externas, tentamos alguns status comuns adicionais.
+    const maybeFetchFallbackRows = async () => {
+      if (!fallbackStatuses.length) return;
       for (const status of fallbackStatuses) {
         const payload = {
           status,
@@ -4613,6 +4606,10 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
           console.error("Falha ao buscar OS (fallback) com status " + status + ":", err.message);
         }
       }
+    };
+
+    if (!allRows.length) {
+      await maybeFetchFallbackRows();
     }
 
     if (!allRows.length) return [];
@@ -4624,45 +4621,27 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
 
     if (!contractRows.length) return [];
 
-    const uniqueRows = dedupeBy(
-      contractRows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row, openStatusIds)),
-      (row) => String(row.id || row.os_id || "")
-    );
+    const pickUniqueOpenRows = (rows) =>
+      dedupeBy(
+        rows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row, openStatusIds)),
+        (row) => String(row.id || row.os_id || "")
+      );
+
+    let uniqueRows = pickUniqueOpenRows(contractRows);
+    if (!uniqueRows.length && fallbackStatuses.length) {
+      await maybeFetchFallbackRows();
+      const nextContractRows = allRows.filter((row) => {
+        const rowContractId = normalizeContractId(row.contrato || row.contrato_id || row.id_contrato || row.contratoId || "");
+        return rowContractId && rowContractId === normalizeContractId(normalizedContractId);
+      });
+      uniqueRows = pickUniqueOpenRows(nextContractRows);
+    }
+
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
 
     const picked = uniqueRows.slice(0, 3);
 
-    // Garantir que so retornamos OS ABERTAS/PENDENTES (por texto do formulario web) quando possivel.
-    let session = null;
-    try {
-      session = await createSgpWebSession(config, null);
-    } catch {
-      session = null;
-    }
-
-    const verified = [];
-    for (const raw of picked) {
-      if (!raw) continue;
-      const osId = String(raw.id || raw.os_id || "").trim();
-      if (!osId) continue;
-      if (session) {
-        try {
-          const form = await fetchSgpOsEditForm(config, session, osId);
-          const statusLabel = extractHtmlSelectSelectedLabel(form.html, "status");
-          if (isClosedStatusText(statusLabel)) {
-            continue;
-          }
-          if (statusLabel && !isOpenStatusText(statusLabel)) {
-            continue;
-          }
-        } catch {
-          // Se falhar a verificacao web (2FA/permissao), mantemos pelo filtro anterior.
-        }
-      }
-      verified.push(raw);
-    }
-
-    return verified.map(raw => {
+    return picked.map(raw => {
       const osId = String(raw.id || raw.os_id || "");
       return {
         osId,

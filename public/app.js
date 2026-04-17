@@ -2155,17 +2155,18 @@ function fillScheduleFormFromContract(contract, openOses = []) {
   updateScheduleSubmitButtonState();
 }
 
-async function lookupContractAndFill() {
+async function lookupContractAndFill(options = {}) {
   if (!state.isAdmin && !state.isOperator) {
     return;
   }
+  const force = options && options.force === true;
   const contractId = elements.scheduleForm.elements.contrato.value.trim();
   if (!contractId) {
     resetContractLookupState();
     return;
   }
 
-  if (elements.scheduleForm.dataset.loadedContract === contractId) {
+  if (!force && elements.scheduleForm.dataset.loadedContract === contractId) {
     return;
   }
 
@@ -2181,10 +2182,12 @@ async function lookupContractAndFill() {
 
     fillScheduleFormFromContract(data.contract, data.openOses);
     elements.scheduleForm.dataset.loadedContract = contractId;
-    if (Array.isArray(data.openOses) && data.openOses.length) {
-      setContractLookupStatus("Selecione uma OS aberta abaixo para agendar.", "success");
+    if (data.openOsesError) {
+      setContractLookupStatus(`Falha ao buscar OS do contrato no SGP: ${data.openOsesError}`, "error");
+    } else if (Array.isArray(data.openOses) && data.openOses.length) {
+      setContractLookupStatus("Selecione uma OS aberta/pendente abaixo para agendar.", "success");
     } else {
-      setContractLookupStatus("Nao existem OS aberta - verificar no SGP.", "error");
+      setContractLookupStatus("Nao existem OS aberta/pendente - verificar no SGP.", "error");
     }
   } catch (error) {
     elements.scheduleForm.dataset.loadedContract = "";
@@ -2252,14 +2255,14 @@ function wireEvents() {
   if (elements.sendConfirmationButton) {
     elements.sendConfirmationButton.addEventListener("click", sendSelectedConfirmations);
   }
-  elements.lookupContractButton.addEventListener("click", lookupContractAndFill);
+  elements.lookupContractButton.addEventListener("click", () => lookupContractAndFill({ force: true }));
   if (elements.cancelEditButton) {
     elements.cancelEditButton.addEventListener("click", resetScheduleForm);
   }
   if (elements.blockSlotForm) {
     elements.blockSlotForm.addEventListener("submit", submitBlockSlot);
   }
-  elements.scheduleForm.elements.contrato.addEventListener("blur", lookupContractAndFill);
+  elements.scheduleForm.elements.contrato.addEventListener("blur", () => lookupContractAndFill({ force: false }));
   elements.scheduleForm.elements.contrato.addEventListener("input", () => {
     elements.scheduleForm.dataset.loadedContract = "";
     setContractLookupStatus("");
