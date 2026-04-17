@@ -2313,7 +2313,7 @@ function normalizeContractId(value) {
 function isOpenServiceOrder(raw, allowedStatusIds = null) {
   if (allowedStatusIds && typeof allowedStatusIds === "object") {
     const idCandidate = raw?.status_id ?? raw?.statusId ?? raw?.status ?? raw?.situacao ?? "";
-    const idText = String(idCandidate || "").trim();
+    const idText = String(idCandidate ?? "").trim();
     return Boolean(idText && /^\d+$/.test(idText) && allowedStatusIds.has(idText));
   }
 
