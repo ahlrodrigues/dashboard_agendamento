@@ -31,6 +31,7 @@
   },
   "agendamento": {
     "endpoint_lista": "/api/ura/ordemservico/list/",
+    "endpoint_pops": "/api/ura/pops/",
     "endpoint_contrato": "/api/suporte/contrato/list/",
     "endpoint_agendar": "/api/ura/chamado/",
     "ocorrencia_tipo_padrao": 5,

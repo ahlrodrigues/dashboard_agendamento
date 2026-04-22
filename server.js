@@ -445,6 +445,7 @@ function loadConfig() {
     },
     agendamento: {
       endpoint_lista: "/api/ura/ordemservico/list/",
+      endpoint_pops: "/api/ura/pops/",
       endpoint_contrato: "/api/suporte/contrato/list/",
       endpoint_agendar: "/api/ura/chamado/",
       ocorrencia_tipo_padrao: 5,
@@ -1906,6 +1907,7 @@ function extractListFromResponse(data) {
   return (
     data.data ||
     data.results ||
+    data.pops ||
     data.ordens_servicos ||
     data.ordens_servico ||
     data.response ||
@@ -1975,6 +1977,94 @@ async function listServiceOrders(config, { startDate, endDate }, operatorAuth = 
   }
 
   return dedupeBy(results, (item) => String(item.id || item.os_id || item.pk || JSON.stringify(item)));
+}
+
+function normalizePopName(raw) {
+  if (typeof raw === "string" || typeof raw === "number") {
+    return String(raw || "").trim();
+  }
+  if (!raw || typeof raw !== "object") {
+    return "";
+  }
+  return String(
+    raw.nome ||
+      raw.name ||
+      raw.descricao ||
+      raw.description ||
+      raw.pop ||
+      raw.nome_pop ||
+      raw.pop_nome ||
+      raw.contrato_pop_nome ||
+      raw.fantasia ||
+      raw.razao ||
+      raw.label ||
+      ""
+  ).trim();
+}
+
+function parseBooleanish(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) {
+    return null;
+  }
+  if (["1", "true", "sim", "s", "yes", "y", "ativo", "ativa", "active", "habilitado", "habilitada"].includes(text)) {
+    return true;
+  }
+  if (["0", "false", "nao", "não", "n", "no", "inativo", "inativa", "inactive", "desativado", "desativada", "desabilitado", "desabilitada"].includes(text)) {
+    return false;
+  }
+  return null;
+}
+
+function isPopActive(raw) {
+  if (!raw || typeof raw !== "object") {
+    return true;
+  }
+
+  const inactiveValue = parseBooleanish(raw.inativo ?? raw.inactive ?? raw.desativado ?? raw.disabled);
+  if (inactiveValue === true) {
+    return false;
+  }
+
+  const activeValue = parseBooleanish(raw.ativo ?? raw.active ?? raw.is_active ?? raw.habilitado ?? raw.enabled);
+  if (activeValue !== null) {
+    return activeValue;
+  }
+
+  const statusValue = parseBooleanish(raw.status_pop ?? raw.pop_status ?? raw.status_nome ?? raw.status_label ?? raw.situacao_nome ?? raw.situacao);
+  if (statusValue !== null) {
+    return statusValue;
+  }
+
+  return true;
+}
+
+async function listSgpPops(config, operatorAuth = null) {
+  const endpoint = String(config.agendamento?.endpoint_pops || "/api/ura/pops/").trim();
+  if (!endpoint) {
+    return [];
+  }
+
+  const response = await postToSgp(config, endpoint, {}, operatorAuth);
+  const rows = extractListFromResponse(response);
+  if (!Array.isArray(rows)) {
+    throw new Error("Formato inesperado na lista de POPs.");
+  }
+
+  return dedupeBy(
+    rows
+      .filter(isPopActive)
+      .map(normalizePopName)
+      .filter(Boolean),
+    (value) => value
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 async function fetchServiceOrderById(config, osId, operatorAuth = null) {
@@ -3066,7 +3156,9 @@ async function getDashboardData(query, authUser = null) {
   const filteredSerializedSchedules = filtered.map(serializeSchedule);
   const summary = summarizeSchedules(serializedSchedules);
   const grid = buildGrid(serializedSchedules, startDate, slots);
-  const availableRoutes = Array.from(new Set(serializedSchedules.map((item) => String(item.rota || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const scheduleRoutes = Array.from(new Set(serializedSchedules.map((item) => String(item.rota || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const sgpPops = await listSgpPops(config, operatorAuth).catch(() => null);
+  const availableRoutes = Array.from(new Set((Array.isArray(sgpPops) ? sgpPops : scheduleRoutes))).sort((a, b) => a.localeCompare(b));
 
   return {
     ok: true,
