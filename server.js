@@ -117,8 +117,7 @@ let confirmationResendJobRunning = false;
 
 const sgpOperatorSessions = new Map();
 const sgpWebSessionCache = new Map();
-let sgpWebBlockedUntil = 0;
-let sgpWebBlockedReason = "";
+const sgpWebBlockedSessions = new Map();
 
 const DASHBOARD_VERSION = (() => {
   try {
@@ -454,6 +453,7 @@ function loadConfig() {
       prioridade_os_padrao: 2,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
+      confirmacao_credenciais: "robo",
       ...(config.agendamento || {})
     },
     auth: {
@@ -519,6 +519,14 @@ function buildSgpAuthHeaders(config, operatorAuth) {
   return buildAuthHeaders(config);
 }
 
+function resolveConfirmationDispatchCredentials(config, operatorAuth = null) {
+  const mode = String(config.agendamento?.confirmacao_credenciais || "robo").trim().toLowerCase();
+  if (["operador", "operator", "usuario_logado", "usuário_logado", "logged_user"].includes(mode)) {
+    return operatorAuth;
+  }
+  return null;
+}
+
 function buildBasePayload(config) {
   const app = String(config.app_token_auth?.app || "").trim();
   const token = String(config.app_token_auth?.token || "").trim();
@@ -564,20 +572,51 @@ function resolveSgpWebTwoFactorBlockMs(config) {
   return 10 * 60 * 1000;
 }
 
-function isSgpWebTemporarilyBlocked(config) {
-  return Date.now() < sgpWebBlockedUntil;
+function resolveSgpWebCredentialParts(config, credentials = null) {
+  return {
+    baseUrl: String(config.url_base || "").replace(/\/+$/, ""),
+    username: String(credentials?.username || config.basic_auth?.username || "").trim(),
+    password: String(credentials?.password || config.basic_auth?.password || "").trim()
+  };
 }
 
-function markSgpWebTemporarilyBlocked(config, reason, detail = "") {
+function getSgpWebBlockKey(config, credentials = null) {
+  const parts = resolveSgpWebCredentialParts(config, credentials);
+  return `${parts.baseUrl}::${parts.username}`;
+}
+
+function getSgpWebBlockState(config, credentials = null) {
+  const key = getSgpWebBlockKey(config, credentials);
+  const entry = sgpWebBlockedSessions.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (Date.now() >= Number(entry.blockedUntil || 0)) {
+    sgpWebBlockedSessions.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function isSgpWebTemporarilyBlocked(config, credentials = null) {
+  return Boolean(getSgpWebBlockState(config, credentials));
+}
+
+function markSgpWebTemporarilyBlocked(config, reason, detail = "", credentials = null) {
   const blockMs = resolveSgpWebTwoFactorBlockMs(config);
   const until = Date.now() + blockMs;
-  if (until <= sgpWebBlockedUntil) {
+  const key = getSgpWebBlockKey(config, credentials);
+  const current = sgpWebBlockedSessions.get(key);
+  if (current && until <= Number(current.blockedUntil || 0)) {
     return;
   }
-  sgpWebBlockedUntil = until;
-  sgpWebBlockedReason = String(reason || "").trim() || "unknown";
+  const blockedReason = String(reason || "").trim() || "unknown";
+  sgpWebBlockedSessions.set(key, {
+    blockedUntil: until,
+    reason: blockedReason
+  });
   const minutes = Math.max(1, Math.round(blockMs / 60000));
-  console.warn(`[SGP_WEB] Bloqueado por ${minutes}min (${sgpWebBlockedReason})${detail ? `: ${detail}` : ""}`);
+  console.warn(`[SGP_WEB] Bloqueado por ${minutes}min (${blockedReason})${detail ? `: ${detail}` : ""}`);
 }
 
 function buildSgpTwoFactorError(message, detail) {
@@ -863,21 +902,18 @@ function toBrazilDateTime(date, time) {
 }
 
 async function createSgpWebSession(config, credentials = null) {
-  if (isSgpWebTemporarilyBlocked(config)) {
-    const detail = sgpWebBlockedUntil
-      ? `SGP web bloqueado ate ${new Date(sgpWebBlockedUntil).toISOString()} (${sgpWebBlockedReason || "2FA"}).`
-      : "SGP web bloqueado por 2FA.";
+  const { baseUrl, username, password } = resolveSgpWebCredentialParts(config, credentials);
+  if (!baseUrl || !username || !password) {
+    throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
+  }
+
+  const blocked = getSgpWebBlockState(config, { username, password });
+  if (blocked) {
+    const detail = `SGP web bloqueado ate ${new Date(blocked.blockedUntil).toISOString()} (${blocked.reason || "2FA"}).`;
     throw buildSgpTwoFactorError(
       "SGP web indisponivel no momento (bloqueado por 2FA).",
       detail
     );
-  }
-
-  const baseUrl = String(config.url_base || "").replace(/\/+$/, "");
-  const username = String(credentials?.username || config.basic_auth?.username || "").trim();
-  const password = String(credentials?.password || config.basic_auth?.password || "").trim();
-  if (!baseUrl || !username || !password) {
-    throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
   }
 
   const sessionKey = `${baseUrl}::${username}::${password}`;
@@ -936,6 +972,7 @@ async function createSgpWebSession(config, credentials = null) {
   }
   const session = {
     baseUrl,
+    username,
     cookies: sessionCookies
   };
   sgpWebSessionCache.set(sessionKey, { createdAt: Date.now(), session });
@@ -998,7 +1035,7 @@ async function fetchSgpOsEditForm(config, session, osId) {
 
   if (lastAttempt?.twoFactorLike) {
     const detail = `OS ${normalizedOsId}. URL: ${lastAttempt.finalUrl || lastAttempt.url}. HTTP ${lastAttempt.status}.`;
-    markSgpWebTemporarilyBlocked(config, "2FA_required", detail);
+    markSgpWebTemporarilyBlocked(config, "2FA_required", detail, session);
     throw buildSgpTwoFactorError(
       "Nao foi possivel abrir o formulario web da OS no SGP (o SGP exigiu confirmacao 2FA).",
       detail
@@ -1184,7 +1221,7 @@ async function fetchConfirmationDetailsForOs(config, osId, credentials = null) {
     return applyConfirmationDispatchState(cached, readConfirmationDispatchEntry(normalizedOsId));
   }
 
-  if (isSgpWebTemporarilyBlocked(config)) {
+  if (isSgpWebTemporarilyBlocked(config, credentials)) {
     return applyConfirmationDispatchState({
       confirmationUrl: "",
       confirmationStatus: "sem_confirmacao",
@@ -1253,12 +1290,11 @@ async function getOsDetails(config, osId, credentials = null) {
     }
   }
 
-  if (isSgpWebTemporarilyBlocked(config)) {
+  const blocked = getSgpWebBlockState(config, credentials);
+  if (blocked) {
     throw buildSgpTwoFactorError(
       "Nao foi possivel obter detalhes via web do SGP (2FA ativo).",
-      sgpWebBlockedUntil
-        ? `SGP web bloqueado ate ${new Date(sgpWebBlockedUntil).toISOString()} (${sgpWebBlockedReason || "2FA"}).`
-        : "SGP web bloqueado por 2FA."
+      `SGP web bloqueado ate ${new Date(blocked.blockedUntil).toISOString()} (${blocked.reason || "2FA"}).`
     );
   }
 
@@ -1669,6 +1705,7 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
     endereco: String(item?.endereco || "").trim(),
     observacao: String(item?.observacao || "").trim()
   };
+  const dispatchCredentials = resolveConfirmationDispatchCredentials(config, credentials);
 
   const scheduled = enqueueSgpDispatch(config, async () => {
     writeConfirmationDispatchEntry(osId, {
@@ -1680,7 +1717,7 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
     });
 
 	    try {
-	      const response = await updateScheduleViaSgpWebForm(config, osId, entry, credentials);
+	      const response = await updateScheduleViaSgpWebForm(config, osId, entry, dispatchCredentials);
 	      const mutationError = getSgpMutationError(response);
 	      if (mutationError) {
 	        throw new Error(mutationError);
@@ -1699,7 +1736,7 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
 	          message: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
 	        };
 	      }
-	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, credentials).catch(() => ({
+	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, dispatchCredentials).catch(() => ({
 	        confirmationUrl: "",
 	        confirmationStatus: "aguardando_confirmacao",
 	        confirmationTitle: "",
@@ -3056,7 +3093,7 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
     return schedules;
   }
 
-  if (isSgpWebTemporarilyBlocked(config)) {
+  if (isSgpWebTemporarilyBlocked(config, credentials)) {
     return schedules;
   }
 
@@ -3065,7 +3102,7 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
     session = await createSgpWebSession(config, credentials);
   } catch (error) {
     if (isSgpTwoFactorBlock(error)) {
-      markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""));
+      markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""), credentials);
       return schedules;
     }
     return schedules;
@@ -3091,7 +3128,7 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
       } catch (error) {
         if (isSgpTwoFactorBlock(error)) {
           stop = true;
-          markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""));
+          markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""), credentials);
         }
         const cached = readConfirmationCache(item.osId);
         item.confirmationUrl = cached?.confirmationUrl || "";
@@ -3770,11 +3807,12 @@ async function createSchedule(payload, authUser = null) {
           };
         }
 
-        if (
-          canRequestCustomerConfirmation(entry) &&
-          String(operatorAuth?.username || "").trim() &&
-          String(operatorAuth?.password || "").trim()
-        ) {
+        const confirmationCredentials = resolveConfirmationDispatchCredentials(config, operatorAuth);
+        const canUseConfirmationCredentials = confirmationCredentials
+          ? Boolean(String(confirmationCredentials.username || "").trim() && String(confirmationCredentials.password || "").trim())
+          : Boolean(String(config.basic_auth?.username || "").trim() && String(config.basic_auth?.password || "").trim());
+
+        if (canRequestCustomerConfirmation(entry) && canUseConfirmationCredentials) {
 	          try {
 	            await queueConfirmationDispatch(config, {
 	              id: createdOsId,
