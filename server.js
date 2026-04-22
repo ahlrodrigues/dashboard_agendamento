@@ -60,6 +60,31 @@ function extractDashboardCreatedBy(text) {
   return { text: without, createdBy };
 }
 
+function normalizeMultilineText(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function mergeSgpObservation(existing, incoming) {
+  const current = normalizeMultilineText(existing);
+  const next = normalizeMultilineText(incoming);
+  if (!next) {
+    return current;
+  }
+  if (!current) {
+    return next;
+  }
+  if (current === next || current.includes(next)) {
+    return current;
+  }
+  if (next.includes(current)) {
+    return next;
+  }
+  return `${current}\n\n${next}`;
+}
+
 function hasDashboardCreatedByMetadata(text) {
   const raw = String(text || "");
   return DASHBOARD_USER_AUDIT_RE.test(raw) || DASHBOARD_USER_MARK_RE.test(raw);
@@ -733,23 +758,37 @@ function mergeCookieHeaders(...cookieSources) {
   return Array.from(entries.values()).join("; ");
 }
 
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(parseInt(code, 10)));
+}
+
 function extractHtmlFieldValue(html, name) {
   const safeName = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const input = html.match(new RegExp(`<input[^>]*name=['"]${safeName}['"][^>]*value=['"]([^'"]*)['"][^>]*>`, "i"));
+  const namedTag = new RegExp(`<input(?=[^>]*name=['"]${safeName}['"])[^>]*>`, "i");
+  const input = html.match(namedTag);
   if (input) {
-    return input[1];
+    const value = input[0].match(/value=['"]([^'"]*)['"]/i);
+    return value ? decodeHtmlEntities(value[1]) : "";
   }
 
   const textarea = html.match(new RegExp(`<textarea[^>]*name=['"]${safeName}['"][^>]*>([\\s\\S]*?)<\\/textarea>`, "i"));
   if (textarea) {
-    return textarea[1];
+    return decodeHtmlEntities(textarea[1]);
   }
 
   const select = html.match(new RegExp(`<select[^>]*name=['"]${safeName}['"][^>]*>([\\s\\S]*?)<\\/select>`, "i"));
   if (select) {
     const options = [...select[1].matchAll(/<option([^>]*)value=['"]([^'"]*)['"]([^>]*)>/gi)];
     const selected = options.find((match) => /selected/i.test(`${match[1]} ${match[3]}`));
-    return selected ? selected[2] : "";
+    return selected ? decodeHtmlEntities(selected[2]) : "";
   }
 
   return "";
@@ -1338,13 +1377,6 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
   const osIdStr = String(osId || "").trim();
   if (!osIdStr) return null;
 
-  const resolveSgpObservacaoFromRow = (row) => String(
-    row?.observacao ||
-      row?.os_observacao ||
-      row?.observacao_os ||
-      ""
-  );
-
   const resolveSgpAnotacaoFromRow = (row) => String(
     row?.anotacao ||
       row?.os_anotacao ||
@@ -1358,7 +1390,7 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
   return {
     ok: true,
     anotacao: resolveSgpAnotacaoFromRow(row),
-    observacao: resolveSgpObservacaoFromRow(row),
+    observacao: pickSgpObservationFromRaw(row),
     conteudo: String(row.conteudo || row.descritivo || ""),
     responsavel: String(row.responsavel || ""),
     data_agendamento: String(row.data_agendamento || row.os_data_agendamento || row.data_hora_agendamento || ""),
@@ -1382,7 +1414,11 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       )
     : "";
 	  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
+	  const incomingObservacao = baseJustificativa
+	    ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
+	    : "";
 	  const existingObservacao = extractSgpObservacaoValueFromHtml(html);
+	  const mergedObservacao = mergeSgpObservation(existingObservacao, incomingObservacao);
 	  const payload = {
 	    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
 	    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
@@ -1401,7 +1437,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
 		    conteudo: extractHtmlFieldValue(html, "conteudo"),
 		    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
 		    // Observação (SGP) - campo correto é 'observacao'
-		    observacao: baseJustificativa || existingObservacao,
+		    observacao: mergedObservacao,
 		    // Observação interna (SGP) - manter o valor atual
 		    anotacao: extractHtmlFieldValue(html, "anotacao"),
 	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
@@ -1488,9 +1524,11 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
-  const observacaoForSgp = baseJustificativa
+  const existingObservation = await fetchExistingSgpObservation(config, normalizedOsId, operatorAuth);
+  const observationWithAudit = baseJustificativa
     ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
     : "";
+  const observacaoForSgp = mergeSgpObservation(existingObservation, observationWithAudit);
   const scheduledDateTime = toScheduledDateTime(entry.data, entry.horario);
   const scheduledDateTimeBr = toBrazilDateTime(entry.data, entry.horario);
   const scheduledDate = isoDateOnly(entry.data);
@@ -2615,6 +2653,39 @@ function normalizeContractLookup(config, raw) {
   };
 }
 
+function pickSgpObservationFromRaw(raw) {
+  return String(
+    raw?.observacao ||
+      raw?.os_observacao ||
+      raw?.observacao_os ||
+      raw?.observacao_sgp ||
+      raw?.anotacao ||
+      raw?.os_anotacao ||
+      ""
+  ).trim();
+}
+
+async function fetchExistingSgpObservation(config, osId, credentials = null) {
+  const normalizedOsId = String(osId || "").trim();
+  if (!normalizedOsId) {
+    return "";
+  }
+
+  const row = await fetchServiceOrderById(config, normalizedOsId, credentials).catch(() => null);
+  const apiObservation = pickSgpObservationFromRaw(row);
+  if (apiObservation) {
+    return apiObservation;
+  }
+
+  try {
+    const session = await createSgpWebSession(config, null);
+    const form = await fetchSgpOsEditForm(config, session, normalizedOsId);
+    return extractSgpObservacaoValueFromHtml(form.html);
+  } catch (error) {
+    return "";
+  }
+}
+
 function normalizeSchedule(config, raw, source = "sgp") {
   const scheduleDateTime = extractSgpScheduledDateTime(raw);
   const date = scheduleDateTime.date;
@@ -2622,7 +2693,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
   const status = normalizeStatus(raw);
   const motivo = normalizeMotivo(raw);
   const sgpStatus = source === "sgp" ? normalizeSgpStatus(raw) : "";
-  const extractedObs = extractDashboardCreatedBy(raw.observacao || raw.anotacao || raw.descricao || raw.motivo || "");
+  const extractedObs = extractDashboardCreatedBy(pickSgpObservationFromRaw(raw) || raw.descricao || raw.motivo || "");
 
   return {
     id: `${source}-${pickProtocol(raw) || cryptoRandomId()}`,
