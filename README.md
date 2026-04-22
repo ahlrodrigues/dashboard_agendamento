@@ -69,6 +69,7 @@ Observacao:
 - para alterar data/horario de OS aberta no SGP, preencha tambem `app_token_auth.app` e `app_token_auth.token`
 - os IDs em `agendamento.statuses_consulta` variam por instância do SGP (ex.: aqui `0=Aberta` e `3=Pendente`). Se aparecer “Encerrada” no calendário, revise essa lista.
 - ao agendar com data+horario+tecnico, o backend pode forcar a prioridade da OS para alta usando `agendamento.prioridade_os_ao_agendar` (padrao `1`). Para desativar, defina `0`.
+- ao agendar com data+horario, o backend altera a OS para aberta usando `agendamento.status_os_ao_agendar` (padrao `0`). Ajuste se a sua instancia usar outro ID para “Aberta”.
 - confirmacao automatica (SMS): so e solicitada quando a OS tiver **data de agendamento** e **tecnico** preenchidos. OS com data mas sem tecnico nao disparam confirmacao (e o botao “Enviar confirmacao” ignora esses itens).
 
 ## Como executar

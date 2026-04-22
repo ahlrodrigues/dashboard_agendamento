@@ -39,6 +39,7 @@
     "setor_padrao": 1,
     "prioridade_os_padrao": 2,
     "prioridade_os_ao_agendar": 1,
+    "status_os_ao_agendar": 0,
     "confirmacao_credenciais": "robo",
     "statuses_consulta": [
       0,

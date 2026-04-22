@@ -476,6 +476,8 @@ function loadConfig() {
       motivo_os_padrao: 1,
       setor_padrao: 1,
       prioridade_os_padrao: 2,
+      prioridade_os_ao_agendar: 1,
+      status_os_ao_agendar: 0,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
       confirmacao_credenciais: "robo",
@@ -1403,6 +1405,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+  const forcedStatus = resolveStatusForScheduledOs(config, entry);
   const shouldRequestConfirmation = canRequestCustomerConfirmation(entry);
   const hasDefinedScheduleTime = Boolean(entry?.data && entry?.horario && entry.horario !== "A definir");
   const existingScheduleValue = extractHtmlFieldValue(html, "data_agendamento");
@@ -1441,7 +1444,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
 		    // Observação interna (SGP) - manter o valor atual
 		    anotacao: extractHtmlFieldValue(html, "anotacao"),
 	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
-	    status: extractHtmlFieldValue(html, "status") || "0",
+	    status: forcedStatus != null ? String(forcedStatus) : (extractHtmlFieldValue(html, "status") || "0"),
 	    veiculo: extractHtmlFieldValue(html, "veiculo"),
 	    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
 	    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
@@ -1523,6 +1526,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   }
 
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+  const forcedStatus = resolveStatusForScheduledOs(config, entry);
   const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
   const existingObservation = await fetchExistingSgpObservation(config, normalizedOsId, operatorAuth);
   const observationWithAudit = baseJustificativa
@@ -1557,6 +1561,9 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
     }
+    if (forcedStatus != null) {
+      payload.os_status = forcedStatus;
+    }
     if (hasMeaningfulTechnician(entry.tecnico)) {
       payload.os_tecnico_responsavel = entry.tecnico;
       payload.responsavel = entry.tecnico;
@@ -1578,6 +1585,9 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
       payload.prioridade = forcedPriority;
+    }
+    if (forcedStatus != null) {
+      payload.os_status = forcedStatus;
     }
     return payload;
   };
@@ -3394,6 +3404,17 @@ function resolvePriorityForScheduledOs(config, entry) {
   return desired;
 }
 
+function resolveStatusForScheduledOs(config, entry) {
+  const desired = Number(config.agendamento?.status_os_ao_agendar);
+  if (!Number.isFinite(desired) || desired < 0) {
+    return null;
+  }
+  if (!entry?.data || !entry?.horario || entry.horario === "A definir") {
+    return null;
+  }
+  return desired;
+}
+
 function canRequestCustomerConfirmation(entry) {
   if (!entry?.data) {
     return false;
@@ -3404,6 +3425,7 @@ function canRequestCustomerConfirmation(entry) {
 function buildCreateCallPayload(config, entry) {
   const content = `Agendamento solicitado para ${entry.data} ${entry.horario}.`;
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+  const forcedStatus = resolveStatusForScheduledOs(config, entry);
   const payload = {
     contrato: entry.contrato,
     conteudo: content,
@@ -3419,6 +3441,9 @@ function buildCreateCallPayload(config, entry) {
     // Algumas instancias do SGP usam este campo para persistir a data/hora do agendamento.
     os_data_agendamento: toScheduledDateTime(entry.data, entry.horario)
   };
+  if (forcedStatus != null) {
+    payload.os_status = forcedStatus;
+  }
 
   if (entry.tecnico) {
     payload.responsavel = entry.tecnico;
@@ -4112,11 +4137,13 @@ async function updateSchedule(payload, authUser = null) {
 
 		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
 		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+		    const forcedStatus = resolveStatusForScheduledOs(config, entry);
 	        const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
 	        const observacaoForSgp = baseJustificativa ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy) : "";
 	        const sgpPayload = {
 			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
 			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
+			      ...(forcedStatus != null ? { status: forcedStatus } : {}),
 			      ...(observacaoForSgp ? { observacao: observacaoForSgp } : {}),
 			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
 			    };
