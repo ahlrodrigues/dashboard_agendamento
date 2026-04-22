@@ -1938,12 +1938,43 @@ async function sendSelectedConfirmations(event) {
       current.confirmationStatus = "na_fila_envio";
       current.confirmationSent = false;
     }
+    const sentIds = new Set((data.sent || []).map((item) => String(item.id || "").trim()).filter(Boolean));
+    for (const id of sentIds) {
+      const current = state.schedulesById.get(id);
+      if (!current) {
+        continue;
+      }
+      current.confirmationStatus = "aguardando_confirmacao";
+      current.confirmationSent = true;
+    }
+    const failedIds = new Map((data.failed || []).map((item) => [String(item.id || "").trim(), item]).filter(([id]) => id));
+    for (const [id, failed] of failedIds.entries()) {
+      const current = state.schedulesById.get(id);
+      if (!current) {
+        continue;
+      }
+      current.confirmationStatus = failed.state === "manual" ? "envio_manual" : "erro_envio";
+      current.confirmationSent = false;
+      current.confirmationTitle = failed.reason || "";
+    }
     state.selectedScheduleIds.clear();
     renderCalendar(state.data.grid);
     updateSelectionControls();
 
     const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
-    alert(skippedCount ? `${data.message}\n${skippedCount} item(ns) foi(ram) ignorado(s).` : data.message);
+    const failedCount = Array.isArray(data.failed) ? data.failed.length : 0;
+    const details = [];
+    if (failedCount) {
+      details.push(`${failedCount} item(ns) falhou(aram).`);
+      const firstReason = data.failed.find((item) => item?.reason)?.reason;
+      if (firstReason) {
+        details.push(firstReason);
+      }
+    }
+    if (skippedCount) {
+      details.push(`${skippedCount} item(ns) foi(ram) ignorado(s).`);
+    }
+    alert(details.length ? `${data.message}\n${details.join("\n")}` : data.message);
   } catch (error) {
     alert(error.message);
   } finally {

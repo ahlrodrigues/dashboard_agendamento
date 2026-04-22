@@ -1629,11 +1629,12 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   return { endpoint: last.endpoint, payload: last.payload, response: last.response, attempts };
 }
 
-async function queueConfirmationDispatch(config, item, credentials = null) {
+async function queueConfirmationDispatch(config, item, credentials = null, options = {}) {
   const osId = String(item?.osId || "").trim();
   if (!osId) {
     throw new Error("OS nao informada para envio da confirmacao.");
   }
+  const itemId = String(item?.id || "").trim();
 
   const existingEntry = readConfirmationDispatchEntry(osId) || {};
   const dispatchKind = String(item?.dispatchKind || "").trim() || "inicial";
@@ -1643,9 +1644,10 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
       ? Math.max(1, Number(existingEntry.resendCount || 0) || 0)
       : Math.max(0, Number(existingEntry.resendCount || 0) || 0);
 
+  const queuedAt = new Date().toISOString();
   writeConfirmationDispatchEntry(osId, {
     state: "queued",
-    queuedAt: new Date().toISOString(),
+    queuedAt,
     requestedAt: existingEntry.requestedAt || "",
     firstRequestedAt: existingEntry.firstRequestedAt || "",
     lastSentAt: existingEntry.lastSentAt || "",
@@ -1668,7 +1670,7 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
     observacao: String(item?.observacao || "").trim()
   };
 
-	  void enqueueSgpDispatch(config, async () => {
+  const scheduled = enqueueSgpDispatch(config, async () => {
     writeConfirmationDispatchEntry(osId, {
       state: "processing",
       processingAt: new Date().toISOString(),
@@ -1689,7 +1691,13 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
 	          manualAt: new Date().toISOString(),
 	          errorMessage: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
 	        });
-	        return;
+	        return {
+	          ok: false,
+	          state: "manual",
+	          id: itemId,
+	          osId,
+	          message: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
+	        };
 	      }
 	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, credentials).catch(() => ({
 	        confirmationUrl: "",
@@ -1698,6 +1706,13 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
 	        confirmationSent: true,
 	        confirmationRequestedAt: new Date().toISOString()
 	      })));
+	      return {
+	        ok: true,
+	        state: "requested",
+	        id: itemId,
+	        osId,
+	        message: "Confirmacao solicitada ao SGP."
+	      };
 	    } catch (error) {
 	      if (isSgpTwoFactorBlock(error)) {
 	        writeConfirmationDispatchEntry(osId, {
@@ -1705,15 +1720,43 @@ async function queueConfirmationDispatch(config, item, credentials = null) {
 	          manualAt: new Date().toISOString(),
 	          errorMessage: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
 	        });
-	        return;
+	        return {
+	          ok: false,
+	          state: "manual",
+	          id: itemId,
+	          osId,
+	          message: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
+	        };
 	      }
+	      const errorMessage = String(error.message || "Falha ao solicitar envio ao SGP.").trim();
 	      writeConfirmationDispatchEntry(osId, {
 	        state: "error",
 	        errorAt: new Date().toISOString(),
-	        errorMessage: String(error.message || "Falha ao solicitar envio ao SGP.").trim()
+	        errorMessage
 	      });
+	      return {
+	        ok: false,
+	        state: "error",
+	        id: itemId,
+	        osId,
+	        message: errorMessage
+	      };
 	    }
   });
+
+  if (options?.wait) {
+    return scheduled;
+  }
+
+  void scheduled;
+  return {
+    ok: true,
+    state: "queued",
+    id: itemId,
+    osId,
+    queuedAt,
+    message: "Confirmacao enfileirada para envio via SGP."
+  };
 }
 
 function determineConfirmationResendAction(dispatchEntry, nowMs = Date.now()) {
@@ -4313,14 +4356,41 @@ async function requestConfirmationDispatch(payload, authUser = null) {
     };
   }
 
-  await Promise.all(validItems.map((item) => queueConfirmationDispatch(config, item, operatorAuth)));
+  const results = await Promise.all(validItems.map((item) => queueConfirmationDispatch(config, item, operatorAuth, { wait: true })));
+  const sent = results.filter((item) => item?.ok);
+  const failed = results
+    .filter((item) => !item?.ok)
+    .map((item) => ({
+      id: String(item?.id || "").trim(),
+      osId: String(item?.osId || "").trim(),
+      state: String(item?.state || "error").trim(),
+      reason: String(item?.message || "Falha ao solicitar envio ao SGP.").trim()
+    }));
+
+  if (!sent.length) {
+    return {
+      statusCode: 207,
+      body: {
+        ok: true,
+        message: failed[0]?.reason || "Nao foi possivel enviar confirmacao pelo SGP.",
+        queued: [],
+        sent: [],
+        failed,
+        skipped
+      }
+    };
+  }
 
   return {
-    statusCode: 202,
+    statusCode: failed.length ? 207 : 200,
     body: {
       ok: true,
-      message: `${validItems.length} OS enfileirada(s) para envio de confirmacao via SGP.`,
-      queued: validItems.map((item) => ({ id: item.id, osId: item.osId })),
+      message: failed.length
+        ? `${sent.length} OS enviada(s) para confirmacao; ${failed.length} falhou(aram).`
+        : `${sent.length} OS enviada(s) para confirmacao via SGP.`,
+      queued: [],
+      sent: sent.map((item) => ({ id: item.id, osId: item.osId })),
+      failed,
       skipped
     }
   };
