@@ -831,7 +831,11 @@ function renderChip(item) {
 function matchesCurrentFilters(item) {
   const search = String(elements.searchFilter?.value || "").trim().toLowerCase();
   const status = String(elements.statusFilter?.value || "todos").trim().toLowerCase();
-  const selectedRoutes = new Set(Array.from(elements.routeFilter?.selectedOptions || []).map((option) => String(option.value || "").trim()).filter(Boolean));
+  const selectedRoutes = new Set(
+    Array.from(elements.routeFilter?.selectedOptions || [])
+      .map((option) => normalizePopKey(option.value))
+      .filter(Boolean)
+  );
   const confirmationStatus = String(item.confirmationStatus || "").trim();
 
   if (status && status !== "todos") {
@@ -880,7 +884,7 @@ function matchesCurrentFilters(item) {
     }
   }
 
-  if (selectedRoutes.size && !selectedRoutes.has(String(item.rota || "").trim())) {
+  if (selectedRoutes.size && !selectedRoutes.has(normalizePopKey(item.rota))) {
     return false;
   }
 
@@ -975,9 +979,9 @@ function applySelectedRoutes(values) {
   if (!elements.routeFilter) {
     return;
   }
-  const selected = new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const selected = new Set((values || []).map((value) => normalizePopKey(value)).filter(Boolean));
   for (const option of Array.from(elements.routeFilter.options || [])) {
-    option.selected = selected.has(String(option.value || "").trim());
+    option.selected = selected.has(normalizePopKey(option.value));
   }
 }
 
@@ -986,9 +990,9 @@ function renderRouteFilter(options = [], selectedValues = []) {
     return;
   }
 
-  const selected = new Set(selectedValues.map((value) => String(value || "").trim()).filter(Boolean));
+  const selected = new Set(selectedValues.map((value) => normalizePopKey(value)).filter(Boolean));
   elements.routeFilter.innerHTML = options.length
-    ? options.map((value) => `<option value="${escapeHtml(value)}"${selected.has(value) ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")
+    ? options.map((value) => `<option value="${escapeHtml(value)}"${selected.has(normalizePopKey(value)) ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")
     : "";
 }
 

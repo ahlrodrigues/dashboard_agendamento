@@ -3085,9 +3085,15 @@ function summarizeSchedules(schedules) {
 }
 
 function filterSchedules(schedules, { search, status, pops = [] }) {
+  const normalizedSelectedPops = new Set(
+    (Array.isArray(pops) ? pops : [])
+      .map((value) => normalizePopKey(value))
+      .filter(Boolean)
+  );
+
   return schedules.filter((item) => {
     const confirmationStatus = String(item.confirmationStatus || "").trim();
-    const route = String(item.rota || "").trim();
+    const route = normalizePopKey(item.rota);
 
     if (status && status !== "todos") {
       if (status === "confirmacao_solicitada") {
@@ -3102,7 +3108,7 @@ function filterSchedules(schedules, { search, status, pops = [] }) {
         return false;
       }
     }
-    if (Array.isArray(pops) && pops.length && !pops.includes(route)) {
+    if (normalizedSelectedPops.size && !normalizedSelectedPops.has(route)) {
       return false;
     }
     if (!search) {
