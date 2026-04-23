@@ -921,20 +921,7 @@ function normalizeRouteFilterKey(value) {
     : normalizePopKey(value);
 }
 
-function getAvailableRouteFilterOptions(data = state.data) {
-  const rows = Array.isArray(data?.schedules) ? data.schedules : [];
-  const values = rows
-    .map((item) => (
-      isTechnicianRouteModeEnabled()
-        ? getDisplayTechnicianName(item?.tecnico)
-        : String(item?.rota || "").trim()
-    ))
-    .filter(Boolean);
-  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
-}
-
-function collectSchedulesFromGrid() {
-  const grid = state.data?.grid;
+function collectSchedulesFromGridData(grid) {
   if (!grid?.cells) {
     return [];
   }
@@ -953,6 +940,22 @@ function collectSchedulesFromGrid() {
     }
   }
   return Array.from(byId.values());
+}
+
+function getAvailableRouteFilterOptions(data = state.data) {
+  const rows = collectSchedulesFromGridData(data?.grid);
+  const values = rows
+    .map((item) => (
+      isTechnicianRouteModeEnabled()
+        ? getDisplayTechnicianName(item?.tecnico)
+        : String(item?.rota || "").trim()
+    ))
+    .filter(Boolean);
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function collectSchedulesFromGrid() {
+  return collectSchedulesFromGridData(state.data?.grid);
 }
 
 function findTechnicianForPop(selectedPop) {
