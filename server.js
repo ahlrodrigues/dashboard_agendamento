@@ -554,6 +554,14 @@ function resolveConfirmationDispatchCredentials(config, operatorAuth = null) {
   return null;
 }
 
+function areSameSgpCredentials(left = null, right = null) {
+  const leftUser = String(left?.username || "").trim();
+  const leftPass = String(left?.password || "").trim();
+  const rightUser = String(right?.username || "").trim();
+  const rightPass = String(right?.password || "").trim();
+  return Boolean(leftUser && rightUser && leftUser === rightUser && leftPass === rightPass);
+}
+
 function buildBasePayload(config) {
   const app = String(config.app_token_auth?.app || "").trim();
   const token = String(config.app_token_auth?.token || "").trim();
@@ -1754,6 +1762,9 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
     observacao: String(item?.observacao || "").trim()
   };
   const dispatchCredentials = resolveConfirmationDispatchCredentials(config, credentials);
+  const fallbackCredentials = credentials && !areSameSgpCredentials(dispatchCredentials, credentials)
+    ? credentials
+    : null;
 
   const scheduled = enqueueSgpDispatch(config, async () => {
     writeConfirmationDispatchEntry(osId, {
@@ -1764,69 +1775,83 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
       resendCount: nextResendCount
     });
 
-	    try {
-	      const response = await updateScheduleViaSgpWebForm(config, osId, entry, dispatchCredentials);
-	      const mutationError = getSgpMutationError(response);
-	      if (mutationError) {
-	        throw new Error(mutationError);
-	      }
-	      if (!response?.confirmationDispatchRequested) {
-	        writeConfirmationDispatchEntry(osId, {
-	          state: "manual",
-	          manualAt: new Date().toISOString(),
-	          errorMessage: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
-	        });
-	        return {
-	          ok: false,
-	          state: "manual",
-	          id: itemId,
-	          osId,
-	          message: "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
-	        };
-	      }
-	      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, dispatchCredentials).catch(() => ({
-	        confirmationUrl: "",
-	        confirmationStatus: "aguardando_confirmacao",
-	        confirmationTitle: "",
-	        confirmationSent: true,
-	        confirmationRequestedAt: new Date().toISOString()
-	      })));
-	      return {
-	        ok: true,
-	        state: "requested",
-	        id: itemId,
-	        osId,
-	        message: "Confirmacao solicitada ao SGP."
-	      };
-	    } catch (error) {
-	      if (isSgpTwoFactorBlock(error)) {
-	        writeConfirmationDispatchEntry(osId, {
-	          state: "manual",
-	          manualAt: new Date().toISOString(),
-	          errorMessage: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
-	        });
-	        return {
-	          ok: false,
-	          state: "manual",
-	          id: itemId,
-	          osId,
-	          message: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
-	        };
-	      }
-	      const errorMessage = String(error.message || "Falha ao solicitar envio ao SGP.").trim();
-	      writeConfirmationDispatchEntry(osId, {
-	        state: "error",
-	        errorAt: new Date().toISOString(),
-	        errorMessage
-	      });
-	      return {
-	        ok: false,
-	        state: "error",
-	        id: itemId,
-	        osId,
-	        message: errorMessage
-	      };
-	    }
+    const tryDispatch = async (currentCredentials, label) => {
+      const response = await updateScheduleViaSgpWebForm(config, osId, entry, currentCredentials);
+      const mutationError = getSgpMutationError(response);
+      if (mutationError) {
+        throw new Error(mutationError);
+      }
+      if (!response?.confirmationDispatchRequested) {
+        const manualMessage = "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido).";
+        writeConfirmationDispatchEntry(osId, {
+          state: "manual",
+          manualAt: new Date().toISOString(),
+          errorMessage: manualMessage
+        });
+        return {
+          ok: false,
+          state: "manual",
+          id: itemId,
+          osId,
+          message: manualMessage
+        };
+      }
+      writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, currentCredentials).catch(() => ({
+        confirmationUrl: "",
+        confirmationStatus: "aguardando_confirmacao",
+        confirmationTitle: "",
+        confirmationSent: true,
+        confirmationRequestedAt: new Date().toISOString()
+      })));
+      console.log(`[CONFIRMATION_DISPATCH] OS ${osId} enviada com credenciais ${label}.`);
+      return {
+        ok: true,
+        state: "requested",
+        id: itemId,
+        osId,
+        message: "Confirmacao solicitada ao SGP."
+      };
+    };
+
+    try {
+      return await tryDispatch(dispatchCredentials, dispatchCredentials ? "operador" : "robo");
+    } catch (error) {
+      if (isSgpTwoFactorBlock(error) && fallbackCredentials) {
+        console.warn(`[CONFIRMATION_DISPATCH] OS ${osId} bloqueada por 2FA com robo; tentando operador logado.`);
+        try {
+          return await tryDispatch(fallbackCredentials, "operador");
+        } catch (fallbackError) {
+          error = fallbackError;
+        }
+      }
+      if (isSgpTwoFactorBlock(error)) {
+        writeConfirmationDispatchEntry(osId, {
+          state: "manual",
+          manualAt: new Date().toISOString(),
+          errorMessage: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
+        });
+        return {
+          ok: false,
+          state: "manual",
+          id: itemId,
+          osId,
+          message: "SGP exigiu 2FA para acessar o formulario web. Envio automatico de confirmacao indisponivel; faca manualmente no SGP."
+        };
+      }
+      const errorMessage = String(error.message || "Falha ao solicitar envio ao SGP.").trim();
+      writeConfirmationDispatchEntry(osId, {
+        state: "error",
+        errorAt: new Date().toISOString(),
+        errorMessage
+      });
+      return {
+        ok: false,
+        state: "error",
+        id: itemId,
+        osId,
+        message: errorMessage
+      };
+    }
   });
 
   if (options?.wait) {

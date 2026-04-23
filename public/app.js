@@ -38,6 +38,8 @@ const elements = {
   routeModeTechnician: document.querySelector("#routeModeTechnician"),
   routeModePop: document.querySelector("#routeModePop"),
   routeFilter: document.querySelector("#routeFilter"),
+  routeFilterLabel: document.querySelector("#routeFilterLabel"),
+  routeFilterHint: document.querySelector("#routeFilterHint"),
   searchFilter: document.querySelector("#searchFilter"),
   clearFiltersButton: document.querySelector("#clearFiltersButton"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -833,7 +835,7 @@ function matchesCurrentFilters(item) {
   const status = String(elements.statusFilter?.value || "todos").trim().toLowerCase();
   const selectedRoutes = new Set(
     Array.from(elements.routeFilter?.selectedOptions || [])
-      .map((option) => normalizePopKey(option.value))
+      .map((option) => normalizeRouteFilterKey(option.value))
       .filter(Boolean)
   );
   const confirmationStatus = String(item.confirmationStatus || "").trim();
@@ -884,7 +886,10 @@ function matchesCurrentFilters(item) {
     }
   }
 
-  if (selectedRoutes.size && !selectedRoutes.has(normalizePopKey(item.rota))) {
+  const itemRouteKey = isTechnicianRouteModeEnabled()
+    ? normalizeTechnicianKey(getDisplayTechnicianName(item.tecnico))
+    : normalizePopKey(item.rota);
+  if (selectedRoutes.size && !selectedRoutes.has(itemRouteKey)) {
     return false;
   }
 
@@ -897,6 +902,35 @@ function getSelectedRoutes() {
 
 function isTechnicianRouteModeEnabled() {
   return Boolean(elements.routeModeTechnician?.checked);
+}
+
+function updateRouteFilterUi() {
+  if (elements.routeFilterLabel) {
+    elements.routeFilterLabel.textContent = isTechnicianRouteModeEnabled() ? "Tecnico" : "POP";
+  }
+  if (elements.routeFilterHint) {
+    elements.routeFilterHint.textContent = isTechnicianRouteModeEnabled()
+      ? "Segure Ctrl para selecionar mais de um tecnico."
+      : "Segure Ctrl para selecionar mais de um POP.";
+  }
+}
+
+function normalizeRouteFilterKey(value) {
+  return isTechnicianRouteModeEnabled()
+    ? normalizeTechnicianKey(getDisplayTechnicianName(value))
+    : normalizePopKey(value);
+}
+
+function getAvailableRouteFilterOptions(data = state.data) {
+  const rows = Array.isArray(data?.schedules) ? data.schedules : [];
+  const values = rows
+    .map((item) => (
+      isTechnicianRouteModeEnabled()
+        ? getDisplayTechnicianName(item?.tecnico)
+        : String(item?.rota || "").trim()
+    ))
+    .filter(Boolean);
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
 }
 
 function collectSchedulesFromGrid() {
@@ -979,9 +1013,9 @@ function applySelectedRoutes(values) {
   if (!elements.routeFilter) {
     return;
   }
-  const selected = new Set((values || []).map((value) => normalizePopKey(value)).filter(Boolean));
+  const selected = new Set((values || []).map((value) => normalizeRouteFilterKey(value)).filter(Boolean));
   for (const option of Array.from(elements.routeFilter.options || [])) {
-    option.selected = selected.has(normalizePopKey(option.value));
+    option.selected = selected.has(normalizeRouteFilterKey(option.value));
   }
 }
 
@@ -990,9 +1024,9 @@ function renderRouteFilter(options = [], selectedValues = []) {
     return;
   }
 
-  const selected = new Set(selectedValues.map((value) => normalizePopKey(value)).filter(Boolean));
+  const selected = new Set(selectedValues.map((value) => normalizeRouteFilterKey(value)).filter(Boolean));
   elements.routeFilter.innerHTML = options.length
-    ? options.map((value) => `<option value="${escapeHtml(value)}"${selected.has(normalizePopKey(value)) ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")
+    ? options.map((value) => `<option value="${escapeHtml(value)}"${selected.has(normalizeRouteFilterKey(value)) ? " selected" : ""}>${escapeHtml(value)}</option>`).join("")
     : "";
 }
 
@@ -1308,13 +1342,14 @@ function statusLabel(status) {
 }
 
 function renderTable(rows) {
-  elements.tableCount.textContent = `${rows.length} registros`;
-  if (!rows.length) {
+  const filteredRows = rows.filter((item) => matchesCurrentFilters(item));
+  elements.tableCount.textContent = `${filteredRows.length} registros`;
+  if (!filteredRows.length) {
     elements.scheduleTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">Nenhum agendamento encontrado para os filtros atuais.</td></tr>`;
     return;
   }
 
-  elements.scheduleTableBody.innerHTML = rows
+  elements.scheduleTableBody.innerHTML = filteredRows
     .map(
       (item) => `
         <tr class="schedule-row${item.duplicatePeriod ? " is-duplicate-period" : ""}">
@@ -1370,7 +1405,7 @@ async function loadDashboard() {
     params.set("status", elements.statusFilter.value);
   }
   const selectedRoutes = getSelectedRoutes();
-  if (selectedRoutes.length) {
+  if (!isTechnicianRouteModeEnabled() && selectedRoutes.length) {
     params.set("pops", selectedRoutes.join(","));
   }
   if (elements.searchFilter.value.trim()) {
@@ -1389,7 +1424,8 @@ async function loadDashboard() {
   console.log("loadDashboard - state.isAdmin:", state.isAdmin, "state.isOperator:", state.isOperator);
   state.autoRefreshMs = Math.max(30000, Number(data.autoRefreshSeconds || 300) * 1000);
   updateAdminUiVisibility();
-  renderRouteFilter(data.availableRoutes || [], data.filters?.pops || selectedRoutes);
+  updateRouteFilterUi();
+  renderRouteFilter(getAvailableRouteFilterOptions(data), selectedRoutes);
   renderBlockPopSelect(data.availableRoutes || []);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
   state.selectedScheduleIds = new Set(
@@ -2241,36 +2277,23 @@ function wireEvents() {
   elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
   elements.statusFilter.addEventListener("change", refreshDashboard);
   if (elements.routeFilter) {
-    elements.routeFilter.addEventListener("change", () => {
-      const selectedRoutes = getSelectedRoutes();
-      if (isTechnicianRouteModeEnabled() && selectedRoutes.length === 1) {
-        const selectedPop = selectedRoutes[0];
-        const technician = findTechnicianForPop(selectedPop);
-        const pops = technician ? findPopsForTechnician(technician) : [];
-        if (pops.length) {
-          applySelectedRoutes(pops);
-        }
-      }
-      refreshDashboard();
-    });
+    elements.routeFilter.addEventListener("change", refreshDashboard);
   }
   if (elements.routeModeTechnician) {
     elements.routeModeTechnician.addEventListener("change", () => {
       if (isTechnicianRouteModeEnabled()) {
-        const selectedRoutes = getSelectedRoutes();
-        if (selectedRoutes.length === 1) {
-          const technician = findTechnicianForPop(selectedRoutes[0]);
-          const pops = technician ? findPopsForTechnician(technician) : [];
-          if (pops.length) {
-            applySelectedRoutes(pops);
-          }
-        }
+        applySelectedRoutes([]);
+        renderRouteFilter(getAvailableRouteFilterOptions(), []);
       }
       refreshDashboard();
     });
   }
   if (elements.routeModePop) {
-    elements.routeModePop.addEventListener("change", refreshDashboard);
+    elements.routeModePop.addEventListener("change", () => {
+      applySelectedRoutes([]);
+      renderRouteFilter(getAvailableRouteFilterOptions(), []);
+      refreshDashboard();
+    });
   }
   if (elements.clearFiltersButton) {
     elements.clearFiltersButton.addEventListener("click", clearDashboardFilters);
