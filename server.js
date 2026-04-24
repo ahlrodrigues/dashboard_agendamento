@@ -1009,7 +1009,64 @@ function toBrazilDateTime(date, time) {
   return `${day}/${month}/${year} ${fullTime}`;
 }
 
-async function createSgpWebSession(config, credentials = null) {
+async function refreshSgpWebSession(config, session) {
+  const { baseUrl, username, password } = resolveSgpWebCredentialParts(config, null);
+  if (!baseUrl || !username || !password) {
+    throw new Error("Credenciais web do SGP nao configuradas para re-login.");
+  }
+
+  const loginUrl = `${baseUrl}/accounts/login/`;
+  console.log("[refreshSgpWebSession] Obtendo nova sessão...");
+
+  const loginPage = await fetch(loginUrl, {
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  const loginHtml = await loginPage.text();
+  const loginCsrf = extractHtmlFieldValue(loginHtml, "csrfmiddlewaretoken");
+  const loginCookies = mergeCookieHeaders(
+    loginPage.headers.getSetCookie?.(),
+    loginPage.headers.get("set-cookie")
+  );
+  if (!loginCsrf) {
+    throw new Error("Nao foi possivel obter CSRF para re-login.");
+  }
+
+  const body = new URLSearchParams({
+    csrfmiddlewaretoken: loginCsrf,
+    username,
+    password,
+    next: "/"
+  });
+  const loginResponse = await fetch(loginUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Cookie: loginCookies,
+      Referer: loginUrl
+    },
+    body,
+    redirect: "manual",
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+
+  const sessionCookies = mergeCookieHeaders(
+    loginCookies,
+    loginResponse.headers.getSetCookie?.(),
+    loginResponse.headers.get("set-cookie")
+  );
+  if (!sessionCookies.includes("sessionid=")) {
+    throw new Error("Falha ao fazer re-login no SGP.");
+  }
+
+  console.log("[refreshSgpWebSession] Nova sessão obtida com sucesso.");
+  return {
+    baseUrl,
+    username,
+    cookies: sessionCookies
+  };
+}
+
+async function createSgpWebSession(config, credentials = null, forceRefresh = false) {
   const { baseUrl, username, password } = resolveSgpWebCredentialParts(config, credentials);
   if (!baseUrl || !username || !password) {
     throw new Error("Credenciais web do SGP nao configuradas para editar OS pela interface.");
@@ -1025,10 +1082,12 @@ async function createSgpWebSession(config, credentials = null) {
   }
 
   const sessionKey = `${baseUrl}::${username}::${password}`;
-  const cached = sgpWebSessionCache.get(sessionKey);
-  const ttlMs = resolveSgpWebSessionTtlMs(config);
-  if (cached && (Date.now() - cached.createdAt) < ttlMs) {
-    return cached.session;
+  if (!forceRefresh) {
+    const cached = sgpWebSessionCache.get(sessionKey);
+    const ttlMs = resolveSgpWebSessionTtlMs(config);
+    if (cached && (Date.now() - cached.createdAt) < ttlMs) {
+      return cached.session;
+    }
   }
 
   const loginUrl = `${baseUrl}/accounts/login/`;
@@ -1110,35 +1169,56 @@ async function fetchSgpOsEditForm(config, session, osId) {
   };
 
   let lastAttempt = null;
-  console.log("[fetchSgpOsEditForm] URLs tentadas:", candidates);
-  for (const pathSuffix of candidates) {
-    const url = `${baseUrl}${pathSuffix}`;
-    console.log("[fetchSgpOsEditForm] Tentando URL:", url);
-    const response = await fetch(url, {
-      headers: {
-        Cookie: session.cookies
-      },
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-    const html = await response.text();
-    const finalUrl = response.url || url;
+  const maxRetries = 1;
 
-    console.log("[fetchSgpOsEditForm] Response status:", response.status, "URL final:", finalUrl);
-
-    lastAttempt = {
-      url,
-      finalUrl,
-      status: response.status,
-      ok: response.ok,
-      loginLike: looksLikeLoginPage(html, finalUrl),
-      twoFactorLike: looksLikeTwoFactorPage(html, finalUrl),
-      hasField: hasScheduleField(html)
-    };
-
-    if (response.ok && hasScheduleField(html)) {
-      console.log("[fetchSgpOsEditForm] Formulário encontrado!");
-      return { url, html };
+  for (let retryCount = 0; retryCount <= maxRetries; retryCount++) {
+    if (retryCount > 0) {
+      console.log("[fetchSgpOsEditForm] Sessão expirada, fazendo re-login...");
+      const newSession = await refreshSgpWebSession(config, session);
+      session.cookies = newSession.cookies;
+      console.log("[fetchSgpOsEditForm] Retry", retryCount, "de", maxRetries);
     }
+
+    console.log("[fetchSgpOsEditForm] URLs tentadas:", candidates);
+    for (const pathSuffix of candidates) {
+      const url = `${baseUrl}${pathSuffix}`;
+      console.log("[fetchSgpOsEditForm] Tentando URL:", url);
+      const response = await fetch(url, {
+        headers: {
+          Cookie: session.cookies
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      const html = await response.text();
+      const finalUrl = response.url || url;
+
+      console.log("[fetchSgpOsEditForm] Response status:", response.status, "URL final:", finalUrl);
+
+      lastAttempt = {
+        url,
+        finalUrl,
+        status: response.status,
+        ok: response.ok,
+        loginLike: looksLikeLoginPage(html, finalUrl),
+        twoFactorLike: looksLikeTwoFactorPage(html, finalUrl),
+        hasField: hasScheduleField(html)
+      };
+
+      if (response.ok && hasScheduleField(html)) {
+        console.log("[fetchSgpOsEditForm] Formulário encontrado!");
+        return { url, html };
+      }
+
+      if (lastAttempt.loginLike) {
+        console.log("[fetchSgpOsEditForm] Página de login detectada, encerrando tentativas.");
+        break;
+      }
+    }
+
+    if (retryCount < maxRetries && lastAttempt?.loginLike) {
+      continue;
+    }
+    break;
   }
 
   if (lastAttempt?.twoFactorLike) {
@@ -1562,18 +1642,51 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     body.append(key, String(value ?? ""));
   }
 
-  const response = await fetch(form.url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Cookie: session.cookies,
-      Referer: form.url
-    },
-    body,
-    redirect: "manual",
-    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
-  });
-  const responseText = await response.text();
+const checkSessionExpired = (response, htmlText) => {
+    const redirect = response.headers.get("location") || "";
+    if (redirect.includes("/accounts/login")) {
+      return true;
+    }
+    const finalUrl = response.url || "";
+    if (finalUrl.includes("/accounts/login")) {
+      return true;
+    }
+    if (/name=['"]username['"]/i.test(htmlText) && /name=['"]csrfmiddlewaretoken['"]/i.test(htmlText)) {
+      return true;
+    }
+    return false;
+  };
+
+  let response;
+  let responseText;
+  let retryCount = 0;
+  const maxRetries = 1;
+
+  while (retryCount <= maxRetries) {
+    response = await fetch(form.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Cookie": session.cookies,
+        Referer: form.url
+      },
+      body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+    });
+    responseText = await response.text();
+
+    if (retryCount < maxRetries && checkSessionExpired(response, responseText)) {
+      console.log("[updateScheduleViaSgpWebForm] Sessão expirada, fazendo re-login...");
+      const newSession = await refreshSgpWebSession(config, session);
+      session.cookies = newSession.cookies;
+      retryCount++;
+      console.log("[updateScheduleViaSgpWebForm] Retry", retryCount, "de", maxRetries);
+      continue;
+    }
+    break;
+  }
+
   const responseSummary = summarizeSgpHtmlResponse(responseText);
 
   console.log("[CONFIRMATION_DISPATCH_DEBUG] response", JSON.stringify({
