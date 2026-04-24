@@ -554,14 +554,6 @@ function resolveConfirmationDispatchCredentials(config, operatorAuth = null) {
   return null;
 }
 
-function areSameSgpCredentials(left = null, right = null) {
-  const leftUser = String(left?.username || "").trim();
-  const leftPass = String(left?.password || "").trim();
-  const rightUser = String(right?.username || "").trim();
-  const rightPass = String(right?.password || "").trim();
-  return Boolean(leftUser && rightUser && leftUser === rightUser && leftPass === rightPass);
-}
-
 function buildBasePayload(config) {
   const app = String(config.app_token_auth?.app || "").trim();
   const token = String(config.app_token_auth?.token || "").trim();
@@ -837,6 +829,17 @@ function extractHtmlSelectSelectedLabel(html, name) {
   const options = extractHtmlSelectOptions(html, name);
   const selected = options.find((opt) => opt.selected) || null;
   return selected ? selected.label : "";
+}
+
+function summarizeSgpHtmlResponse(html) {
+  const text = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.slice(0, 280);
 }
 
 function normalizePhoneDigits(value) {
@@ -1412,6 +1415,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   const session = await createSgpWebSession(config, credentials);
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
+  const gatewayOptions = extractHtmlSelectOptions(html, "gateway_sms").filter((item) => item.value);
+  const smsClientOptions = extractHtmlSelectOptions(html, "sms_cliente").filter((item) => item.value);
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const forcedStatus = resolveStatusForScheduledOs(config, entry);
   const shouldRequestConfirmation = canRequestCustomerConfirmation(entry);
@@ -1471,7 +1476,21 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
-		  console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
+  const gatewayLabel = gatewayOptions.find((item) => item.value === String(payload.gateway_sms || "").trim())?.label || "";
+  const smsClientLabels = smsClientOptions
+    .filter((item) => smsClientValues.includes(item.value))
+    .map((item) => item.label);
+
+  console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
+  console.log("[CONFIRMATION_DISPATCH_DEBUG] request", JSON.stringify({
+    osId: String(osId || "").trim(),
+    gatewaySms: String(payload.gateway_sms || "").trim(),
+    gatewayLabel,
+    smsCliente: smsClientValues,
+    smsClienteLabels: smsClientLabels,
+    hasSmsTecnico: Boolean(payload.sms_tecnico),
+    hasEncerraOcorrencia: Boolean(payload.encerra_ocorrencia)
+  }));
   
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(payload)) {
@@ -1495,6 +1514,17 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     redirect: "manual",
     signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
   });
+  const responseText = await response.text();
+  const responseSummary = summarizeSgpHtmlResponse(responseText);
+
+  console.log("[CONFIRMATION_DISPATCH_DEBUG] response", JSON.stringify({
+    osId: String(osId || "").trim(),
+    status: response.status,
+    location: response.headers.get("location") || "",
+    finalUrl: response.url || "",
+    bodyLength: responseText.length,
+    bodySummary: responseSummary
+  }));
 
   const dispatchRequested = Boolean(smsClientValues.length && payload.gateway_sms);
   if (dispatchRequested && response.status >= 200 && response.status < 400) {
@@ -1513,8 +1543,14 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       lastSentAt: nowIso,
       telefone: entry.telefone,
       gateway: payload.gateway_sms,
+      gatewayLabel,
+      smsCliente: smsClientValues,
+      smsClienteLabels: smsClientLabels,
       dispatchKind,
-      resendCount
+      resendCount,
+      responseStatus: response.status,
+      responseLocation: response.headers.get("location") || "",
+      responseSummary
     });
   }
 
@@ -1762,9 +1798,6 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
     observacao: String(item?.observacao || "").trim()
   };
   const dispatchCredentials = resolveConfirmationDispatchCredentials(config, credentials);
-  const fallbackCredentials = credentials && !areSameSgpCredentials(dispatchCredentials, credentials)
-    ? credentials
-    : null;
 
   const scheduled = enqueueSgpDispatch(config, async () => {
     writeConfirmationDispatchEntry(osId, {
@@ -1816,14 +1849,6 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
     try {
       return await tryDispatch(dispatchCredentials, dispatchCredentials ? "operador" : "robo");
     } catch (error) {
-      if (isSgpTwoFactorBlock(error) && fallbackCredentials) {
-        console.warn(`[CONFIRMATION_DISPATCH] OS ${osId} bloqueada por 2FA com robo; tentando operador logado.`);
-        try {
-          return await tryDispatch(fallbackCredentials, "operador");
-        } catch (fallbackError) {
-          error = fallbackError;
-        }
-      }
       if (isSgpTwoFactorBlock(error)) {
         writeConfirmationDispatchEntry(osId, {
           state: "manual",

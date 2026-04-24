@@ -805,18 +805,22 @@ function renderChip(item) {
   const confirmationLabel = confirmationStatusLabel(item.confirmationStatus, item.confirmationSent);
   const confirmationTitle = item.confirmationTitle ? ` title="${escapeHtml(item.confirmationTitle)}"` : "";
   const selected = state.selectedScheduleIds.has(item.id);
-  const canSendConfirmation = canRequestConfirmation(item);
+  const confirmationAvailabilityReason = getConfirmationAvailabilityReason(item);
+  const canSendConfirmation = !confirmationAvailabilityReason;
   const hiddenByFilter = !matchesCurrentFilters(item);
   const duplicatePeriodClass = item.duplicatePeriod ? " is-duplicate-period" : "";
   const selectTitle = canSendConfirmation
     ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
-    : "OS indisponivel para envio";
+    : confirmationAvailabilityReason;
   const selectButton = (state.isAdmin && canSendConfirmation)
     ? `<button class="chip-select-button${selected ? " is-selected" : ""}" type="button" data-select-schedule-id="${escapeHtml(item.id)}" aria-pressed="${selected ? "true" : "false"}" aria-label="${escapeHtml(selectTitle)}" title="${escapeHtml(selectTitle)}">${selected ? "✓" : "+"}</button>`
     : "";
   const deleteButton = canDeleteSchedule(item)
     ? `<button class="chip-delete-button" type="button" data-schedule-id="${escapeHtml(item.id)}" aria-label="Acoes do agendamento">&#9998;</button>`
     : "";
+  const chipFlagTitle = canSendConfirmation
+    ? ` title="${escapeHtml(`OS ${String(item.osId || item.protocolo || "").trim()}`)}"`
+    : ` title="${escapeHtml(confirmationAvailabilityReason)}"`;
   return `
     <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}${duplicatePeriodClass}"${confirmationTitle} tabindex="-1">
       <div class="chip-actions">
@@ -825,7 +829,7 @@ function renderChip(item) {
       </div>
       <strong>${clientName}</strong>
       <small>${routeLabel}<br />${technicianLabel}<br />${reasonLabel}<br />${sgpStatusLabel}${createdByLabel ? `<br />${createdByLabel}` : ""}<br />Confirmacao: ${confirmationLabel}</small>
-      <span class="chip-flag">${canSendConfirmation ? `OS ${escapeHtml(item.osId || item.protocolo || "")}` : "Envio indisponivel"}</span>
+      <span class="chip-flag"${chipFlagTitle}>${canSendConfirmation ? `OS ${escapeHtml(item.osId || item.protocolo || "")}` : "Envio indisponivel"}</span>
     </div>
   `;
 }
@@ -952,6 +956,33 @@ function getAvailableRouteFilterOptions(data = state.data) {
     ))
     .filter(Boolean);
   return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function getAvailableTechnicianOptions(data = state.data) {
+  const rows = collectSchedulesFromGridData(data?.grid);
+  const values = rows
+    .map((item) => getDisplayTechnicianName(item?.tecnico))
+    .filter(Boolean);
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function renderScheduleTechnicianOptions(selectedValue = "", data = state.data) {
+  const select = elements.scheduleForm?.elements?.tecnico;
+  if (!select) {
+    return;
+  }
+
+  const selected = getDisplayTechnicianName(selectedValue);
+  const options = getAvailableTechnicianOptions(data);
+  if (selected && !options.includes(selected)) {
+    options.unshift(selected);
+  }
+
+  select.innerHTML = [
+    `<option value="">Selecione um tecnico</option>`,
+    ...options.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+  ].join("");
+  select.value = selected;
 }
 
 function collectSchedulesFromGrid() {
@@ -1094,15 +1125,24 @@ function confirmationStatusLabel(status, sent = false) {
   return sent ? "Solicitado ao SGP" : "Sem solicitacao";
 }
 
-function canRequestConfirmation(item) {
+function getConfirmationAvailabilityReason(item) {
   if (!state.isAdmin) {
-    return false;
+    return "Envio indisponivel: usuario sem permissao de administrador.";
   }
   if (item.origem !== "sgp" || !String(item.osId || "").trim()) {
-    return false;
+    return "Envio indisponivel: somente OS vindas do SGP podem receber confirmacao.";
   }
-  if (!item.data) return false;
-  return Boolean(getDisplayTechnicianName(item.tecnico));
+  if (!item.data) {
+    return "Envio indisponivel: OS sem data de agendamento.";
+  }
+  if (!getDisplayTechnicianName(item.tecnico)) {
+    return "Envio indisponivel: OS sem tecnico definido.";
+  }
+  return "";
+}
+
+function canRequestConfirmation(item) {
+  return !getConfirmationAvailabilityReason(item);
 }
 
 function updateSelectionControls() {
@@ -1283,6 +1323,7 @@ function fillScheduleFormFromSchedule(item) {
   form.telefone.value = item.telefone || "";
   form.protocolo.value = item.protocolo || item.osId || "";
   form.rota.value = item.rota || "";
+  renderScheduleTechnicianOptions(item.tecnico);
   form.tecnico.value = getDisplayTechnicianName(item.tecnico);
   form.data.value = item.data || "";
   setFormTurno(elements.scheduleForm, inferTurnoFromTime(item.horario));
@@ -1315,6 +1356,7 @@ function resetScheduleForm() {
   elements.scheduleForm.elements.osId.value = "";
   elements.scheduleForm.elements.origem.value = "";
   elements.scheduleForm.elements.data.value = elements.startDateFilter.value || today;
+  renderScheduleTechnicianOptions("");
   setFormTurno(elements.scheduleForm, "");
   resetContractLookupState();
   setScheduleFormMode("create");
@@ -1429,6 +1471,7 @@ async function loadDashboard() {
   updateAdminUiVisibility();
   updateRouteFilterUi();
   renderRouteFilter(getAvailableRouteFilterOptions(data), selectedRoutes);
+  renderScheduleTechnicianOptions(elements.scheduleForm?.elements?.tecnico?.value || "", data);
   renderBlockPopSelect(data.availableRoutes || []);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
   state.selectedScheduleIds = new Set(
@@ -2187,7 +2230,10 @@ function fillScheduleFormFromContract(contract, openOses = []) {
         if (os.pop && f.rota) f.rota.value = os.pop;
 
         // Técnico responsável
-        if (os.responsavel && f.tecnico) f.tecnico.value = os.responsavel;
+        if (os.responsavel && f.tecnico) {
+          renderScheduleTechnicianOptions(os.responsavel);
+          f.tecnico.value = os.responsavel;
+        }
 
         // Data do agendamento (se existir na OS e for válida)
         if (os.data_agendamento && os.data_agendamento !== "0000-00-00" && f.data) {
