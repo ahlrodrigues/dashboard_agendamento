@@ -16,6 +16,8 @@ const state = {
   darkMode: false
 };
 
+const CONFIRMATION_SELECTION_STORAGE_PREFIX = "dashboard_confirmation_selection_ids";
+
 const summaryConfig = [
   { key: "agendado", label: "Agendamentos", className: "blue" },
   { key: "itinerario", label: "Itinerario", className: "indigo" },
@@ -181,6 +183,76 @@ function clearStoredUser() {
   localStorage.removeItem("dashboard_user");
 }
 
+function getConfirmationSelectionStorageKey() {
+  const userKey = String(state.user?.sub || state.user?.username || state.user?.login || "anonymous").trim() || "anonymous";
+  return `${CONFIRMATION_SELECTION_STORAGE_PREFIX}:${userKey}`;
+}
+
+function getConfirmationSelectionIdentity(item) {
+  const osId = String(item?.osId || "").trim();
+  if (String(item?.origem || "").trim() === "sgp" && osId) {
+    return `sgp:${osId}`;
+  }
+  const id = String(item?.id || "").trim();
+  return id ? `id:${id}` : "";
+}
+
+function loadStoredConfirmationSelection() {
+  try {
+    const raw = localStorage.getItem(getConfirmationSelectionStorageKey());
+    const values = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(values)) {
+      return new Set();
+    }
+    return new Set(values.map((id) => String(id || "").trim()).filter(Boolean));
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function persistConfirmationSelection() {
+  try {
+    const values = [...state.selectedScheduleIds]
+      .map((id) => {
+        const item = state.schedulesById.get(id);
+        return item ? getConfirmationSelectionIdentity(item) : `id:${String(id || "").trim()}`;
+      })
+      .filter(Boolean);
+    const key = getConfirmationSelectionStorageKey();
+    if (values.length) {
+      localStorage.setItem(key, JSON.stringify(values));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch (error) {
+  }
+}
+
+function clearStoredConfirmationSelection() {
+  try {
+    localStorage.removeItem(getConfirmationSelectionStorageKey());
+  } catch (error) {
+  }
+}
+
+function restoreAndPruneConfirmationSelection() {
+  const storedKeys = loadStoredConfirmationSelection();
+  const selectedKeys = new Set([...state.selectedScheduleIds].map((id) => {
+    const item = state.schedulesById.get(id);
+    return item ? getConfirmationSelectionIdentity(item) : `id:${String(id || "").trim()}`;
+  }).filter(Boolean));
+  const keys = new Set([...storedKeys, ...selectedKeys]);
+  const selectedIds = [];
+  for (const [id, item] of state.schedulesById.entries()) {
+    const identity = getConfirmationSelectionIdentity(item);
+    if (canRequestConfirmation(item) && (keys.has(identity) || keys.has(id) || keys.has(`id:${id}`))) {
+      selectedIds.push(id);
+    }
+  }
+  state.selectedScheduleIds = new Set(selectedIds);
+  persistConfirmationSelection();
+}
+
 async function checkAuth() {
   const token = getAuthToken();
   if (!token) {
@@ -261,6 +333,7 @@ async function logout() {
   }
 
   clearAuthToken();
+  clearStoredConfirmationSelection();
   clearStoredUser();
   state.user = null;
   state.isAdmin = false;
@@ -1280,39 +1353,6 @@ function setScheduleFormMode(mode) {
   }
 }
 
-async function hydrateObservacaoFromSgpOs(osId, textareaEl, fallbackValue = "") {
-  const normalizedOsId = String(osId || "").trim();
-  if (!normalizedOsId || !textareaEl) {
-    return;
-  }
-
-  try {
-    const response = await apiFetch("/api/os/" + normalizedOsId, { method: "GET" });
-    if (!response.ok) {
-      let payload = null;
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
-      if (payload?.code === "OS_CLOSED") {
-        textareaEl.value = "";
-        showToast(payload.message || "OS encerrada/fechada. Selecione uma OS aberta ou pendente.");
-        return;
-      }
-      throw new Error(payload?.message || "Falha ao buscar detalhes da OS no SGP.");
-    }
-    const details = await response.json();
-    const text = String(details?.observacao || details?.anotacao || fallbackValue || "").trim();
-    textareaEl.value = text;
-  } catch (error) {
-    const text = String(fallbackValue || "").trim();
-    if (text) {
-      textareaEl.value = text;
-    }
-  }
-}
-
 function fillScheduleFormFromSchedule(item) {
   const form = elements.scheduleForm.elements;
   form.id.value = item.id || "";
@@ -1328,23 +1368,10 @@ function fillScheduleFormFromSchedule(item) {
   form.data.value = item.data || "";
   setFormTurno(elements.scheduleForm, inferTurnoFromTime(item.horario));
   form.endereco.value = item.endereco || "";
-  form.observacao.value = item.observacao || "";
+  form.observacao.value = "";
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
   setContractLookupStatus("Agendamento carregado para edicao.", "success");
   setScheduleFormMode("edit");
-  const possibleOsId = String(item.osId || item.protocolo || "").trim();
-  const sgpStatus = String(item?.sgpStatus || "").trim().toLowerCase();
-  const isClosedSgp = sgpStatus
-    ? (sgpStatus.includes("encerr") ||
-        sgpStatus.includes("finaliz") ||
-        sgpStatus.includes("conclu") ||
-        sgpStatus.includes("fechad") ||
-        sgpStatus.includes("cancel") ||
-        sgpStatus.includes("baixad"))
-    : false;
-  if (String(item.origem || "").trim() === "sgp" && possibleOsId && form.observacao && !isClosedSgp) {
-    void hydrateObservacaoFromSgpOs(possibleOsId, form.observacao, item.observacao || "");
-  }
   elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
   updateSlotConflictFromForm();
 }
@@ -1474,9 +1501,7 @@ async function loadDashboard() {
   renderScheduleTechnicianOptions(elements.scheduleForm?.elements?.tecnico?.value || "", data);
   renderBlockPopSelect(data.availableRoutes || []);
   state.schedulesById = new Map(data.schedules.map((item) => [item.id, item]));
-  state.selectedScheduleIds = new Set(
-    [...state.selectedScheduleIds].filter((id) => state.schedulesById.has(id))
-  );
+  restoreAndPruneConfirmationSelection();
 
   renderSummary(data.summary);
   renderNotices(data.notices);
@@ -1626,6 +1651,7 @@ async function handleCalendarGridClick(event) {
     } else {
       state.selectedScheduleIds.add(scheduleId);
     }
+    persistConfirmationSelection();
 
     renderCalendar(state.data.grid);
     updateSelectionControls();
@@ -1666,7 +1692,7 @@ function buildOptimisticScheduleItem(payload, originalItem) {
     data,
     horario: time,
     endereco: payload.endereco || originalItem?.endereco || "",
-    observacao: payload.observacao || originalItem?.observacao || "",
+    observacao: originalItem?.observacao || "",
     createdBy: payload.createdBy || originalItem?.createdBy || "",
     confirmationStatus: originalItem?.confirmationStatus || "sem_confirmacao",
     confirmationUrl: originalItem?.confirmationUrl || "",
@@ -1742,20 +1768,10 @@ function applyScheduleUpdateLocally(payload, data, editing) {
   return true;
 }
 
-function showSuccessMessageAndRefresh(data, payload, editing) {
+async function showSuccessMessageAndRefresh(data, payload, editing) {
   const message = buildScheduleSuccessMessage(data, payload, editing);
   
   showToast(message.replace(/\n/g, " · "));
-  
-  applyScheduleUpdateLocally(payload, data, editing);
-  
-  if (state.data?.grid) {
-    renderCalendar(state.data.grid);
-  }
-  
-  if (state.data?.schedules) {
-    renderTable(state.data.schedules);
-  }
 
   const isModalOpen = elements.scheduleModal?.open;
   if (isModalOpen) {
@@ -1763,6 +1779,19 @@ function showSuccessMessageAndRefresh(data, payload, editing) {
   }
   
   resetScheduleForm();
+
+  try {
+    await loadDashboard();
+  } catch (error) {
+    console.error(error);
+    applyScheduleUpdateLocally(payload, data, editing);
+    if (state.data?.grid) {
+      renderCalendar(state.data.grid);
+    }
+    if (state.data?.schedules) {
+      renderTable(state.data.schedules);
+    }
+  }
 }
 
 function applyScheduleRemovalLocally(id, osId) {
@@ -1791,6 +1820,7 @@ function applyScheduleRemovalLocally(id, osId) {
   
   if (state.selectedScheduleIds) {
     state.selectedScheduleIds.delete(removeId);
+    persistConfirmationSelection();
   }
   
   removeItemFromGridCells(state.data?.grid, removeId);
@@ -1913,7 +1943,7 @@ async function submitSchedule(event) {
     editing,
     button,
     onSuccess: async (data) => {
-      showSuccessMessageAndRefresh(data, payload, editing);
+      await showSuccessMessageAndRefresh(data, payload, editing);
     },
     onError: async (error) => {
       const detail = error?.details?.detail ? `\n${error.details.detail}` : "";
@@ -2044,6 +2074,7 @@ async function sendSelectedConfirmations(event) {
       current.confirmationTitle = failed.reason || "";
     }
     state.selectedScheduleIds.clear();
+    persistConfirmationSelection();
     renderCalendar(state.data.grid);
     updateSelectionControls();
 
@@ -2248,10 +2279,6 @@ function fillScheduleFormFromContract(contract, openOses = []) {
               : os.hora_abertura || "";
           setFormTurno(elements.scheduleForm, inferTurnoFromTime(referenceTime));
         }
-
-	        if (f.observacao) {
-	          void hydrateObservacaoFromSgpOs(os.osId, f.observacao, os.observacao || "");
-	        }
 
         // Destaca o card selecionado
         document.querySelectorAll(".os-suggestion-item").forEach(el => {

@@ -831,6 +831,62 @@ function extractHtmlSelectSelectedLabel(html, name) {
   return selected ? selected.label : "";
 }
 
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function resolveHtmlSelectValue(html, name, requestedValue) {
+  const requested = String(requestedValue || "").trim();
+  if (!requested) {
+    return "";
+  }
+
+  const options = extractHtmlSelectOptions(html, name).filter((item) => item.value);
+  if (!options.length) {
+    return requested;
+  }
+
+  const requestedComparable = normalizeComparableText(requested);
+  const exactValue = options.find((item) => String(item.value || "").trim() === requested);
+  if (exactValue) {
+    return exactValue.value;
+  }
+
+  const exactLabel = options.find((item) => normalizeComparableText(item.label) === requestedComparable);
+  if (exactLabel) {
+    return exactLabel.value;
+  }
+
+  const containsLabel = options.find((item) => {
+    const labelComparable = normalizeComparableText(item.label);
+    return labelComparable && (labelComparable.includes(requestedComparable) || requestedComparable.includes(labelComparable));
+  });
+  if (containsLabel) {
+    return containsLabel.value;
+  }
+
+  return requested;
+}
+
+function technicianMatchesExpected(expected, actual) {
+  if (!hasMeaningfulTechnician(expected)) {
+    return true;
+  }
+  if (!hasMeaningfulTechnician(actual)) {
+    return false;
+  }
+  const expectedComparable = normalizeComparableText(expected);
+  const actualComparable = normalizeComparableText(actual);
+  return actualComparable === expectedComparable ||
+    actualComparable.includes(expectedComparable) ||
+    expectedComparable.includes(actualComparable);
+}
+
 function summarizeSgpHtmlResponse(html) {
   const text = String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -1429,6 +1485,9 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
         String(config.agendamento?.gateway_sms_agendamento_label || "AGENDAMENTO").trim() || "AGENDAMENTO"
       )
     : "";
+  const responsibleValue = hasMeaningfulTechnician(entry.tecnico)
+    ? resolveHtmlSelectValue(html, "responsavel", entry.tecnico)
+    : extractHtmlFieldValue(html, "responsavel");
 	  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
 	  const incomingObservacao = baseJustificativa
 	    ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
@@ -1447,9 +1506,7 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       : existingScheduleValue,
     data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
     data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
-	    responsavel: hasMeaningfulTechnician(entry.tecnico)
-	      ? entry.tecnico
-	      : extractHtmlFieldValue(html, "responsavel"),
+	    responsavel: responsibleValue,
 		    conteudo: extractHtmlFieldValue(html, "conteudo"),
 		    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
 		    // Observação (SGP) - campo correto é 'observacao'
@@ -1488,6 +1545,8 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     gatewayLabel,
     smsCliente: smsClientValues,
     smsClienteLabels: smsClientLabels,
+    responsavel: String(payload.responsavel || "").trim(),
+    tecnicoSolicitado: String(entry.tecnico || "").trim(),
     hasSmsTecnico: Boolean(payload.sms_tecnico),
     hasEncerraOcorrencia: Boolean(payload.encerra_ocorrencia)
   }));
@@ -1596,8 +1655,8 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 		      // No admin web, o campo se chama "data_agendamento" e geralmente espera data+hora.
 		      data_agendamento: dataAgendamentoValue,
 		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-		      // Observação (SGP)
-		      ...(observacaoForSgp ? { observacao: observacaoForSgp, os_observacao: observacaoForSgp } : {}),
+		      // Observação (SGP), preservando o histórico existente.
+		      ...(observacaoForSgp ? { observacao: observacaoForSgp } : {}),
 		      contato_nome: String(entry?.cliente || "").trim(),
 		      contato_telefone: String(entry?.telefone || "").trim()
 		    };
@@ -1624,7 +1683,7 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
 		      data_hora_agendamento: dateTimeValue,
 		      data_agendamento: scheduledDate,
 		      hora_agendamento: scheduledTime ? `${scheduledTime}:00` : "",
-		      ...(observacaoForSgp ? { observacao: observacaoForSgp, os_observacao: observacaoForSgp } : {})
+		      ...(observacaoForSgp ? { observacao: observacaoForSgp } : {})
 		    };
     if (forcedPriority != null) {
       payload.os_prioridade = forcedPriority;
@@ -1639,8 +1698,12 @@ async function updateScheduleViaSgpApi(config, osId, entry, operatorAuth = null)
   const attempts = [];
   const verifyIfExpected = async () => {
     if (expectedDate && expectedTime) {
-      const confirmed = await verifySgpScheduleUpdate(config, normalizedOsId, expectedDate, expectedTime, operatorAuth);
-      if (confirmed.date === expectedDate && confirmed.time === expectedTime) {
+      const confirmed = await verifySgpScheduleUpdate(config, normalizedOsId, expectedDate, expectedTime, operatorAuth, entry.tecnico);
+      if (
+        confirmed.date === expectedDate &&
+        confirmed.time === expectedTime &&
+        technicianMatchesExpected(entry.tecnico, confirmed.technician)
+      ) {
         return confirmed;
       }
     }
@@ -2299,7 +2362,11 @@ function pickSgpScheduleDebugFields(row) {
     "data_cadastro",
     "hora_cadastro",
     "data",
-    "hora"
+    "hora",
+    "responsavel",
+    "tecnico",
+    "tecnico_nome",
+    "finalizado_por"
   ];
   const output = {};
   for (const key of keys) {
@@ -2310,14 +2377,21 @@ function pickSgpScheduleDebugFields(row) {
   return output;
 }
 
-async function verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth = null) {
+async function verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth = null, expectedTechnician = "") {
   const waits = [600, 2200, 5200, 9200];
-  let last = { date: "", time: "" };
+  let last = { date: "", time: "", technician: "" };
   for (const waitMs of waits) {
     await new Promise((resolve) => setTimeout(resolve, waitMs));
     const row = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
-    last = extractSgpScheduledDateTime(row);
-    if (last.date === expectedDate && last.time === expectedTime) {
+    last = {
+      ...extractSgpScheduledDateTime(row),
+      technician: normalizeTechnician(row || {})
+    };
+    if (
+      last.date === expectedDate &&
+      last.time === expectedTime &&
+      technicianMatchesExpected(expectedTechnician, last.technician)
+    ) {
       return last;
     }
   }
@@ -3447,17 +3521,18 @@ function currentDateTimeForSgp() {
 }
 
 function resolvePriorityForScheduledOs(config, entry) {
-  const desired = Number(config.agendamento?.prioridade_os_ao_agendar);
-  if (!Number.isFinite(desired) || desired <= 0) {
-    return null;
-  }
   if (!entry?.data || !entry?.horario || entry.horario === "A definir") {
     return null;
   }
   if (!hasMeaningfulTechnician(entry.tecnico)) {
     return null;
   }
-  return desired;
+  const desired = Number(config.agendamento?.prioridade_os_ao_agendar);
+  if (Number.isFinite(desired) && desired > 0) {
+    return desired;
+  }
+  // No SGP desta integracao, prioridade 1 corresponde a ALTA.
+  return 1;
 }
 
 function resolveStatusForScheduledOs(config, entry) {
@@ -4191,18 +4266,15 @@ async function updateSchedule(payload, authUser = null) {
       };
     }
 
-		    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
-		    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
-		    const forcedStatus = resolveStatusForScheduledOs(config, entry);
-	        const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
-	        const observacaoForSgp = baseJustificativa ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy) : "";
-	        const sgpPayload = {
-			      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
-			      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
-			      ...(forcedStatus != null ? { status: forcedStatus } : {}),
-			      ...(observacaoForSgp ? { observacao: observacaoForSgp } : {}),
-			      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
-			    };
+    const endpoint = `/admin/atendimento/ocorrencia/os/${encodeURIComponent(osId)}/edit/`;
+    const forcedPriority = resolvePriorityForScheduledOs(config, entry);
+    const forcedStatus = resolveStatusForScheduledOs(config, entry);
+    const sgpPayload = {
+      data_agendamento: toBrazilDateTime(entry.data, entry.horario),
+      ...(forcedPriority != null ? { prioridade: forcedPriority } : {}),
+      ...(forcedStatus != null ? { status: forcedStatus } : {}),
+      responsavel: hasMeaningfulTechnician(entry.tecnico) ? entry.tecnico : ""
+    };
 
     logSgpScheduleUpdate("request", { osId, endpoint, payload: sgpPayload });
 
@@ -4262,7 +4334,7 @@ async function updateSchedule(payload, authUser = null) {
     const expectedTime = hhmm(entry.horario);
     const confirmed = response?.mode === "api" && response?.verified?.date && response?.verified?.time
       ? response.verified
-      : await verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth);
+      : await verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth, entry.tecnico);
     const confirmedDate = confirmed.date;
     const confirmedTime = confirmed.time;
 
@@ -4270,20 +4342,22 @@ async function updateSchedule(payload, authUser = null) {
       osId,
       expected: {
         data_agendamento: expectedDate,
-        hora_agendamento: expectedTime
+        hora_agendamento: expectedTime,
+        tecnico: entry.tecnico
       },
       confirmed: {
         data_agendamento: confirmedDate,
-        hora_agendamento: confirmedTime
+        hora_agendamento: confirmedTime,
+        tecnico: confirmed.technician
       }
     });
 
-    if (confirmedDate !== expectedDate || confirmedTime !== expectedTime) {
+    if (confirmedDate !== expectedDate || confirmedTime !== expectedTime || !technicianMatchesExpected(entry.tecnico, confirmed.technician)) {
       const confirmedRow = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
       logSgpScheduleUpdate("verification_raw", {
         osId,
-        expected: { data_agendamento: expectedDate, hora_agendamento: expectedTime },
-        confirmed: { data_agendamento: confirmedDate, hora_agendamento: confirmedTime },
+        expected: { data_agendamento: expectedDate, hora_agendamento: expectedTime, tecnico: entry.tecnico },
+        confirmed: { data_agendamento: confirmedDate, hora_agendamento: confirmedTime, tecnico: confirmed.technician },
         fields: pickSgpScheduleDebugFields(confirmedRow)
       });
       return {
@@ -4291,16 +4365,18 @@ async function updateSchedule(payload, authUser = null) {
         body: {
           ok: false,
           mode: "sgp",
-          message: `O SGP respondeu sucesso, mas a OS ${osId} continuou com agendamento ${confirmedDate || "-"} ${confirmedTime || "-"}.`,
+          message: `O SGP respondeu sucesso, mas a OS ${osId} continuou com agendamento ${confirmedDate || "-"} ${confirmedTime || "-"} e tecnico ${confirmed.technician || "-"}.`,
           response,
           verification: {
             expected: {
               data_agendamento: expectedDate,
-              hora_agendamento: expectedTime
+              hora_agendamento: expectedTime,
+              tecnico: entry.tecnico
             },
             confirmed: {
               data_agendamento: confirmedDate,
-              hora_agendamento: confirmedTime
+              hora_agendamento: confirmedTime,
+              tecnico: confirmed.technician
             }
           }
         }
