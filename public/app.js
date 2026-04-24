@@ -97,7 +97,21 @@ const elements = {
 	  periodConflictModal: document.querySelector("#periodConflictModal"),
 	  periodConflictMessage: document.querySelector("#periodConflictMessage"),
 	  periodConflictCancelButton: document.querySelector("#periodConflictCancelButton"),
-	  periodConflictProceedButton: document.querySelector("#periodConflictProceedButton")
+	  periodConflictProceedButton: document.querySelector("#periodConflictProceedButton"),
+  openLogButton: document.querySelector("#openLogButton"),
+  logModal: document.querySelector("#logModal"),
+  closeLogButton: document.querySelector("#closeLogButton"),
+  refreshLogButton: document.querySelector("#refreshLogButton"),
+  logUpdatedAt: document.querySelector("#logUpdatedAt"),
+  confirmationQueueSummary: document.querySelector("#confirmationQueueSummary"),
+  logOutput: document.querySelector("#logOutput"),
+  openConfirmationMonitorButton: document.querySelector("#openConfirmationMonitorButton"),
+  confirmationMonitorModal: document.querySelector("#confirmationMonitorModal"),
+  closeConfirmationMonitorButton: document.querySelector("#closeConfirmationMonitorButton"),
+  refreshConfirmationMonitorButton: document.querySelector("#refreshConfirmationMonitorButton"),
+  confirmationMonitorUpdatedAt: document.querySelector("#confirmationMonitorUpdatedAt"),
+  confirmationMonitorSummary: document.querySelector("#confirmationMonitorSummary"),
+  confirmationMonitorTableBody: document.querySelector("#confirmationMonitorTableBody")
 	};
 
 const TURNOS = {
@@ -138,6 +152,150 @@ function showPeriodConflictModal(message) {
       elements.periodConflictProceedButton.focus();
     }
   });
+}
+
+function openLogModal() {
+  if (!elements.logModal) {
+    return;
+  }
+  elements.logModal.classList.add("active");
+  void loadActionLog();
+}
+
+function closeLogModal() {
+  if (elements.logModal) {
+    elements.logModal.classList.remove("active");
+  }
+}
+
+function openConfirmationMonitorModal() {
+  if (!elements.confirmationMonitorModal) {
+    return;
+  }
+  elements.confirmationMonitorModal.classList.add("active");
+  void loadConfirmationMonitor();
+}
+
+function closeConfirmationMonitorModal() {
+  if (elements.confirmationMonitorModal) {
+    elements.confirmationMonitorModal.classList.remove("active");
+  }
+}
+
+function renderConfirmationQueueSummary(entries = []) {
+  renderConfirmationSummaryInto(elements.confirmationQueueSummary, entries);
+}
+
+function renderConfirmationSummaryInto(target, entries = []) {
+  if (!target) {
+    return;
+  }
+  if (!entries.length) {
+    target.innerHTML = `<div class="log-summary-item"><strong>Fila de confirmacao</strong><span class="muted">Sem registros</span></div>`;
+    return;
+  }
+  target.innerHTML = entries
+    .map((item) => {
+      const osId = escapeHtml(item.osId || "-");
+      const stateLabel = escapeHtml(item.state || "-");
+      const sentAt = escapeHtml(formatDateTime(item.lastSentAt || item.requestedAt || item.queuedAt || ""));
+      const resend = Number(item.resendCount || 0);
+      const error = item.errorMessage ? `<br /><span class="muted">${escapeHtml(item.errorMessage)}</span>` : "";
+      return `<div class="log-summary-item"><strong>OS ${osId}</strong><span>${stateLabel} · ${sentAt}</span><br /><span class="muted">Reenvios: ${resend}</span>${error}</div>`;
+    })
+    .join("");
+}
+
+function renderConfirmationMonitor(entries = []) {
+  renderConfirmationSummaryInto(elements.confirmationMonitorSummary, entries);
+  if (!elements.confirmationMonitorTableBody) {
+    return;
+  }
+  if (!entries.length) {
+    elements.confirmationMonitorTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">Nenhum envio de confirmacao registrado.</td></tr>`;
+    return;
+  }
+  elements.confirmationMonitorTableBody.innerHTML = entries
+    .map((item) => {
+      const lastSent = item.lastSentAt || item.requestedAt || item.queuedAt || "";
+      const response = item.responseStatus ? `HTTP ${escapeHtml(String(item.responseStatus))}` : "-";
+      const responseSummary = item.responseSummary
+        ? `<span class="confirmation-response-summary">${escapeHtml(item.responseSummary)}</span>`
+        : "";
+      const recipients = Array.isArray(item.smsClienteLabels) && item.smsClienteLabels.length
+        ? `<br /><span class="muted">${escapeHtml(item.smsClienteLabels.join(", "))}</span>`
+        : "";
+      return `
+        <tr>
+          <td><strong>${escapeHtml(item.osId || "-")}</strong></td>
+          <td>${escapeHtml(item.state || "-")}${item.errorMessage ? `<br /><span class="muted">${escapeHtml(item.errorMessage)}</span>` : ""}</td>
+          <td>${escapeHtml(formatDateTime(lastSent))}</td>
+          <td>${escapeHtml(item.gatewayLabel || item.gateway || "-")}${recipients}</td>
+          <td>${response}${responseSummary}</td>
+          <td>${Number(item.resendCount || 0)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+async function loadActionLog() {
+  if (elements.logOutput) {
+    elements.logOutput.textContent = "Carregando...";
+  }
+  if (elements.refreshLogButton) {
+    elements.refreshLogButton.disabled = true;
+  }
+  try {
+    const response = await apiFetch("/api/logs?lines=240", { method: "GET" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Nao foi possivel carregar o log.");
+    }
+    if (elements.logUpdatedAt) {
+      elements.logUpdatedAt.textContent = `Atualizado em ${formatDateTime(data.generatedAt)}`;
+    }
+    renderConfirmationQueueSummary(data.confirmationQueue || []);
+    if (elements.logOutput) {
+      elements.logOutput.textContent = (data.lines || []).join("\n") || "Sem linhas de log.";
+    }
+  } catch (error) {
+    if (elements.logOutput) {
+      elements.logOutput.textContent = error.message || "Falha ao carregar o log.";
+    }
+  } finally {
+    if (elements.refreshLogButton) {
+      elements.refreshLogButton.disabled = false;
+    }
+  }
+}
+
+async function loadConfirmationMonitor() {
+  if (elements.confirmationMonitorTableBody) {
+    elements.confirmationMonitorTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">Carregando...</td></tr>`;
+  }
+  if (elements.refreshConfirmationMonitorButton) {
+    elements.refreshConfirmationMonitorButton.disabled = true;
+  }
+  try {
+    const response = await apiFetch("/api/logs?lines=80", { method: "GET" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Nao foi possivel carregar os envios.");
+    }
+    if (elements.confirmationMonitorUpdatedAt) {
+      elements.confirmationMonitorUpdatedAt.textContent = `Atualizado em ${formatDateTime(data.generatedAt)}`;
+    }
+    renderConfirmationMonitor(data.confirmationQueue || []);
+  } catch (error) {
+    if (elements.confirmationMonitorTableBody) {
+      elements.confirmationMonitorTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">${escapeHtml(error.message || "Falha ao carregar os envios.")}</td></tr>`;
+    }
+  } finally {
+    if (elements.refreshConfirmationMonitorButton) {
+      elements.refreshConfirmationMonitorButton.disabled = false;
+    }
+  }
 }
 
 function getAuthToken() {
@@ -516,7 +674,7 @@ function updateScheduleSubmitButtonState() {
   }
   const hasConflict = Boolean(state.slotConflictActive);
   const hasSelectedOs = Boolean(String(elements.scheduleForm?.elements?.osId?.value || "").trim());
-  button.disabled = state.pendingMutations > 0 || hasConflict || (!hasSelectedOs && state.isAdmin);
+  button.disabled = state.pendingMutations > 0 || (!hasSelectedOs && state.isAdmin);
   if (hasConflict) {
     button.title = "Horario ocupado para o POP selecionado.";
   } else if (!hasSelectedOs && state.isAdmin) {
@@ -1912,8 +2070,10 @@ async function submitSchedule(event) {
   }
   updateSlotConflictFromForm();
   if (state.slotConflictActive) {
-    alert("Horario ocupado ou nao validado. Ajuste POP/Data/Horario para continuar.");
-    return;
+    const proceed = await showPeriodConflictModal("Existe alerta de conflito para este horario. Deseja tentar salvar mesmo assim?");
+    if (!proceed) {
+      return;
+    }
   }
   const periodDecision = await maybeWarnPeriodConflictsForScheduleForm();
   if (!periodDecision.shouldProceed) {
@@ -2291,6 +2451,8 @@ function fillScheduleFormFromContract(contract, openOses = []) {
         setContractLookupStatus(`OS #${os.osId} carregada para edicao no SGP.`, "success");
         elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
         showToast(`OS #${os.osId} selecionada — campos preenchidos.`);
+        updateSlotConflictFromForm();
+        updateScheduleSubmitButtonState();
       };
 
 
@@ -2391,6 +2553,38 @@ function wireEvents() {
   elements.calendarGrid.addEventListener("click", handleCalendarGridClick);
   if (elements.sendConfirmationButton) {
     elements.sendConfirmationButton.addEventListener("click", sendSelectedConfirmations);
+  }
+  if (elements.openLogButton) {
+    elements.openLogButton.addEventListener("click", openLogModal);
+  }
+  if (elements.closeLogButton) {
+    elements.closeLogButton.addEventListener("click", closeLogModal);
+  }
+  if (elements.refreshLogButton) {
+    elements.refreshLogButton.addEventListener("click", loadActionLog);
+  }
+  if (elements.openConfirmationMonitorButton) {
+    elements.openConfirmationMonitorButton.addEventListener("click", openConfirmationMonitorModal);
+  }
+  if (elements.closeConfirmationMonitorButton) {
+    elements.closeConfirmationMonitorButton.addEventListener("click", closeConfirmationMonitorModal);
+  }
+  if (elements.refreshConfirmationMonitorButton) {
+    elements.refreshConfirmationMonitorButton.addEventListener("click", loadConfirmationMonitor);
+  }
+  if (elements.logModal) {
+    elements.logModal.addEventListener("click", (event) => {
+      if (event.target === elements.logModal) {
+        closeLogModal();
+      }
+    });
+  }
+  if (elements.confirmationMonitorModal) {
+    elements.confirmationMonitorModal.addEventListener("click", (event) => {
+      if (event.target === elements.confirmationMonitorModal) {
+        closeConfirmationMonitorModal();
+      }
+    });
   }
   elements.lookupContractButton.addEventListener("click", () => lookupContractAndFill({ force: true }));
   if (elements.cancelEditButton) {

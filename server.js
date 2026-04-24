@@ -4701,6 +4701,48 @@ function sendFile(res, filePath) {
   });
 }
 
+function readRecentLogLines(filePath, maxLines = 240) {
+  const safeMax = Math.max(20, Math.min(1000, Number(maxLines || 240)));
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    return text.split(/\r?\n/).filter(Boolean).slice(-safeMax);
+  } catch (error) {
+    return [];
+  }
+}
+
+function getActionLogData(searchParams = new URLSearchParams()) {
+  const lines = readRecentLogLines(path.join(BASE_DIR, "dashboard_server.log"), searchParams.get("lines"));
+  const queue = readConfirmationDispatchLog();
+  const confirmationQueue = Object.entries(queue)
+    .map(([osId, entry]) => ({
+      osId,
+      state: String(entry?.state || "").trim() || "-",
+      queuedAt: String(entry?.queuedAt || "").trim(),
+      requestedAt: String(entry?.requestedAt || "").trim(),
+      lastSentAt: String(entry?.lastSentAt || "").trim(),
+      manualAt: String(entry?.manualAt || "").trim(),
+      resendCount: Number(entry?.resendCount || 0) || 0,
+      dispatchKind: String(entry?.dispatchKind || "").trim(),
+      gateway: String(entry?.gateway || "").trim(),
+      gatewayLabel: String(entry?.gatewayLabel || entry?.gateway || "").trim(),
+      smsCliente: Array.isArray(entry?.smsCliente) ? entry.smsCliente : [],
+      smsClienteLabels: Array.isArray(entry?.smsClienteLabels) ? entry.smsClienteLabels : [],
+      responseStatus: entry?.responseStatus || "",
+      responseLocation: String(entry?.responseLocation || "").trim(),
+      responseSummary: String(entry?.responseSummary || "").trim(),
+      errorMessage: String(entry?.errorMessage || "").trim()
+    }))
+    .sort((a, b) => Date.parse(b.lastSentAt || b.requestedAt || b.queuedAt || "") - Date.parse(a.lastSentAt || a.requestedAt || a.queuedAt || ""));
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    lines,
+    confirmationQueue
+  };
+}
+
 function collectRequestBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -4842,6 +4884,15 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && parsedUrl.pathname === "/api/dashboard-data") {
       const data = await getDashboardData(parsedUrl.searchParams, req.authUser);
       sendJson(res, 200, data);
+      return;
+    }
+
+    if (req.method === "GET" && parsedUrl.pathname === "/api/logs") {
+      if (!req.authUser?.isAdmin) {
+        sendJson(res, 403, { ok: false, message: "Acesso permitido apenas para administradores." });
+        return;
+      }
+      sendJson(res, 200, getActionLogData(parsedUrl.searchParams));
       return;
     }
 

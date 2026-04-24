@@ -320,6 +320,10 @@
 	          <div class="footer-stack">
 	            <div class="footer-brand">NET4YOU INTERNET SOLUTION &reg;</div>
 	            <div id="footerVersion" class="footer-version muted"></div>
+	            <div class="footer-actions admin-only">
+	              <button id="openConfirmationMonitorButton" class="ghost-button footer-log-button" type="button">Envios de confirmação</button>
+	              <button id="openLogButton" class="ghost-button footer-log-button" type="button">Abrir log</button>
+	            </div>
 	          </div>
 	        </div>
 	      </footer>
@@ -435,6 +439,50 @@
 	        <button id="periodConflictCancelButton" class="ghost-button" type="button">Cancelar</button>
 	        <button id="periodConflictProceedButton" class="primary-button" type="button">Prosseguir</button>
 	      </footer>
+	    </div>
+	  </div>
+
+	  <div id="logModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+	    <div class="modal-content log-modal-content">
+	      <header class="modal-header log-modal-header">
+	        <h2 id="logModalTitle">Log de ações</h2>
+	        <button id="closeLogButton" class="ghost-button" type="button" aria-label="Fechar log">X</button>
+	      </header>
+	      <div class="log-toolbar">
+	        <span id="logUpdatedAt" class="muted">-</span>
+	        <button id="refreshLogButton" class="ghost-button" type="button">Atualizar</button>
+	      </div>
+	      <div id="confirmationQueueSummary" class="log-summary"></div>
+	      <pre id="logOutput" class="log-output">Carregando...</pre>
+	    </div>
+	  </div>
+
+	  <div id="confirmationMonitorModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmationMonitorTitle">
+	    <div class="modal-content log-modal-content">
+	      <header class="modal-header log-modal-header">
+	        <h2 id="confirmationMonitorTitle">Envios de confirmação</h2>
+	        <button id="closeConfirmationMonitorButton" class="ghost-button" type="button" aria-label="Fechar envios">X</button>
+	      </header>
+	      <div class="log-toolbar">
+	        <span id="confirmationMonitorUpdatedAt" class="muted">-</span>
+	        <button id="refreshConfirmationMonitorButton" class="ghost-button" type="button">Atualizar</button>
+	      </div>
+	      <div id="confirmationMonitorSummary" class="log-summary"></div>
+	      <div class="table-wrap confirmation-monitor-wrap">
+	        <table class="confirmation-monitor-table">
+	          <thead>
+	            <tr>
+	              <th>OS</th>
+	              <th>Estado</th>
+	              <th>Último envio</th>
+	              <th>Gateway</th>
+	              <th>Resposta</th>
+	              <th>Reenvios</th>
+	            </tr>
+	          </thead>
+	          <tbody id="confirmationMonitorTableBody"></tbody>
+	        </table>
+	      </div>
 	    </div>
 	  </div>
 	</body>
