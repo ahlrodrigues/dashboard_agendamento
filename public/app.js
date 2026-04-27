@@ -1850,7 +1850,7 @@ function buildOptimisticScheduleItem(payload, originalItem) {
     data,
     horario: time,
     endereco: payload.endereco || originalItem?.endereco || "",
-    observacao: originalItem?.observacao || "",
+    observacao: payload.observacao || payload.justificativa || originalItem?.observacao || "",
     createdBy: payload.createdBy || originalItem?.createdBy || "",
     confirmationStatus: originalItem?.confirmationStatus || "sem_confirmacao",
     confirmationUrl: originalItem?.confirmationUrl || "",
