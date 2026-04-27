@@ -5555,11 +5555,12 @@ function buildOsUrl(config, osId) {
 async function lookupOpenOsForContract(config, contractId, operatorAuth = null) {
   try {
     const endpoint = config.agendamento?.endpoint_lista || "/api/ura/ordemservico/list/";
-    const statuses = Array.isArray(config.agendamento?.statuses_consulta) ? config.agendamento.statuses_consulta : [0, 1];
+    const statuses = Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
+      ? config.agendamento.statuses_consulta
+      : [0, 1];
     const normalizedContractId = String(contractId || "").trim();
     const statusesTried = (Array.isArray(statuses) ? statuses : []).map((value) => Number(value)).filter((n) => Number.isFinite(n));
-    const fallbackStatuses = [0, 1, 2, 3, 4, 5].filter((n) => !statusesTried.includes(n));
-    const openStatusIds = new Set(statusesTried.concat(fallbackStatuses).map((value) => String(value)));
+    const openStatusIds = new Set(statusesTried.map((value) => String(value)));
 			    
     const allRows = [];
     for (const status of statusesTried) {
@@ -5581,34 +5582,6 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
       }
     }
 
-    // Fallback: algumas instâncias usam IDs diferentes para "pendente/aberta".
-    // Se a lista inicial não trouxer OS abertas/pendentes externas, tentamos alguns status comuns adicionais.
-    const maybeFetchFallbackRows = async () => {
-      if (!fallbackStatuses.length) return;
-      for (const status of fallbackStatuses) {
-        const payload = {
-          status,
-          limit: 10,
-          contrato: normalizedContractId,
-          contrato_id: normalizedContractId,
-          id_contrato: normalizedContractId
-        };
-        try {
-          const response = await postToSgp(config, endpoint, payload, operatorAuth);
-          const chunk = extractListFromResponse(response);
-          if (Array.isArray(chunk)) {
-            allRows.push(...chunk);
-          }
-        } catch (err) {
-          console.error("Falha ao buscar OS (fallback) com status " + status + ":", err.message);
-        }
-      }
-    };
-
-    if (!allRows.length) {
-      await maybeFetchFallbackRows();
-    }
-
     if (!allRows.length) return [];
 
     const contractRows = allRows.filter((row) => {
@@ -5624,15 +5597,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
         (row) => String(row.id || row.os_id || "")
       );
 
-    let uniqueRows = pickUniqueOpenRows(contractRows);
-    if (!uniqueRows.length && fallbackStatuses.length) {
-      await maybeFetchFallbackRows();
-      const nextContractRows = allRows.filter((row) => {
-        const rowContractId = normalizeContractId(row.contrato || row.contrato_id || row.id_contrato || row.contratoId || "");
-        return rowContractId && rowContractId === normalizeContractId(normalizedContractId);
-      });
-      uniqueRows = pickUniqueOpenRows(nextContractRows);
-    }
+    const uniqueRows = pickUniqueOpenRows(contractRows);
 
     uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
 
