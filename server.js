@@ -1568,15 +1568,17 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   const responsibleValue = hasMeaningfulTechnician(entry.tecnico)
     ? resolveHtmlSelectValue(html, "responsavel", entry.tecnico)
     : extractHtmlFieldValue(html, "responsavel");
-	  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
-	  const incomingObservacao = baseJustificativa
-	    ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
-	    : "";
-	  const existingObservacao = extractSgpObservacaoValueFromHtml(html);
-	  const mergedObservacao = mergeSgpObservation(existingObservacao, incomingObservacao);
-	  const payload = {
-	    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
-	    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
+  const baseJustificativa = String(entry.justificativa || entry.observacao || "").trim();
+  const incomingObservacao = baseJustificativa
+    ? ensureDashboardCreatedByAudit(baseJustificativa, entry.createdBy)
+    : "";
+  const existingObservacaoFromHtml = extractSgpObservacaoValueFromHtml(html);
+  const existingObservacao = existingObservacaoFromHtml ||
+    await fetchExistingSgpObservation(config, osId, credentials);
+  const mergedObservacao = mergeSgpObservation(existingObservacao, incomingObservacao);
+  const payload = {
+    csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
+    dpb_token: extractHtmlFieldValue(html, "dpb_token"),
     setor: extractHtmlFieldValue(html, "setor") || "1",
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
@@ -1586,18 +1588,18 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       : existingScheduleValue,
     data_previsao_finalizacao: extractHtmlFieldValue(html, "data_previsao_finalizacao"),
     data_agendamento_oc: extractHtmlFieldValue(html, "data_agendamento_oc"),
-	    responsavel: responsibleValue,
-		    conteudo: extractHtmlFieldValue(html, "conteudo"),
-		    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
-		    // Observação (SGP) - campo correto é 'observacao'
-		    observacao: mergedObservacao,
-		    // Observação interna (SGP) - manter o valor atual
-		    anotacao: extractHtmlFieldValue(html, "anotacao"),
-	    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
-	    status: forcedStatus != null ? String(forcedStatus) : (extractHtmlFieldValue(html, "status") || "0"),
-	    veiculo: extractHtmlFieldValue(html, "veiculo"),
-	    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
-	    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
+    responsavel: responsibleValue,
+    conteudo: extractHtmlFieldValue(html, "conteudo"),
+    servicoprestado: extractHtmlFieldValue(html, "servicoprestado"),
+    // Observação (SGP) - campo correto é 'observacao'
+    observacao: mergedObservacao,
+    // Observação interna (SGP) - manter o valor atual
+    anotacao: extractHtmlFieldValue(html, "anotacao"),
+    anotacao_publica: extractHtmlFieldValue(html, "anotacao_publica"),
+    status: forcedStatus != null ? String(forcedStatus) : (extractHtmlFieldValue(html, "status") || "0"),
+    veiculo: extractHtmlFieldValue(html, "veiculo"),
+    veiculo_km: extractHtmlFieldValue(html, "veiculo_km"),
+    sistema_sync: extractHtmlFieldValue(html, "sistema_sync"),
     data_checkin: extractHtmlFieldValue(html, "data_checkin"),
     ...(shouldRequestConfirmation && (gatewayValue || extractHtmlFieldValue(html, "gateway_sms"))
       ? { gateway_sms: gatewayValue || extractHtmlFieldValue(html, "gateway_sms") }
@@ -2925,7 +2927,7 @@ async function fetchExistingSgpObservation(config, osId, credentials = null) {
   }
 
   try {
-    const session = await createSgpWebSession(config, null);
+    const session = await createSgpWebSession(config, credentials);
     const form = await fetchSgpOsEditForm(config, session, normalizedOsId);
     return extractSgpObservacaoValueFromHtml(form.html);
   } catch (error) {
