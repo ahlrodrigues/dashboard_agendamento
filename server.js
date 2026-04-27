@@ -2735,6 +2735,11 @@ function pickSgpScheduleDebugFields(row) {
     "os_data_agendamento",
     "data_agendada",
     "hora_agendada",
+    "prioridade",
+    "os_prioridade",
+    "prioridade_id",
+    "prioridade_nome",
+    "prioridade_descricao",
     "data_cadastro",
     "hora_cadastro",
     "data",
@@ -2757,6 +2762,75 @@ function pickSgpScheduleDebugFields(row) {
   return output;
 }
 
+function extractSgpPriorityState(raw) {
+  const valueCandidates = [
+    raw?.prioridade,
+    raw?.os_prioridade,
+    raw?.prioridade_id
+  ];
+  const labelCandidates = [
+    raw?.prioridade_descricao,
+    raw?.prioridade_nome,
+    raw?.prioridade_label
+  ];
+
+  let value = "";
+  for (const candidate of valueCandidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      value = text;
+      break;
+    }
+  }
+
+  let label = "";
+  for (const candidate of labelCandidates) {
+    const text = String(candidate ?? "").trim();
+    if (text) {
+      label = text;
+      break;
+    }
+  }
+
+  return { value, label };
+}
+
+function priorityMatchesExpected(expectedPriority, confirmedPriority) {
+  if (expectedPriority === null || expectedPriority === undefined || expectedPriority === "") {
+    return true;
+  }
+  const expectedText = String(expectedPriority).trim();
+  const confirmedValue = String(confirmedPriority?.value || "").trim();
+  const confirmedLabel = normalizeComparableText(confirmedPriority?.label || "");
+
+  if (confirmedValue && confirmedValue === expectedText) {
+    return true;
+  }
+  if (expectedText === "1" && confirmedLabel.includes("alta")) {
+    return true;
+  }
+  return false;
+}
+
+async function readSgpPriorityState(config, osId, operatorAuth = null) {
+  const row = await fetchServiceOrderById(config, osId, operatorAuth).catch(() => null);
+  const fromApi = extractSgpPriorityState(row);
+  if (fromApi.value || fromApi.label) {
+    return fromApi;
+  }
+
+  try {
+    const session = await createSgpWebSession(config, operatorAuth);
+    const form = await fetchSgpOsEditForm(config, session, osId);
+    return {
+      value: String(extractHtmlFieldValue(form.html, "prioridade") || "").trim(),
+      label: String(extractHtmlSelectSelectedLabel(form.html, "prioridade") || "").trim()
+    };
+  } catch {
+    return { value: "", label: "" };
+  }
+}
+
 async function verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime, operatorAuth = null, expectedTechnician = "") {
   const waits = [600, 2200, 5200, 9200];
   let last = { date: "", time: "", technician: "" };
@@ -2776,6 +2850,33 @@ async function verifySgpScheduleUpdate(config, osId, expectedDate, expectedTime,
     }
   }
   return last;
+}
+
+async function verifySgpPriorityUpdate(config, osId, expectedPriority, operatorAuth = null) {
+  if (expectedPriority === null || expectedPriority === undefined || expectedPriority === "") {
+    return {
+      ok: true,
+      priority: { value: "", label: "" }
+    };
+  }
+
+  const waits = [600, 2200, 5200, 9200];
+  let last = { value: "", label: "" };
+  for (const waitMs of waits) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    last = await readSgpPriorityState(config, osId, operatorAuth);
+    if (priorityMatchesExpected(expectedPriority, last)) {
+      return {
+        ok: true,
+        priority: last
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    priority: last
+  };
 }
 
 async function verifySgpObservationUpdate(config, osId, expectedObservation, operatorAuth = null) {
@@ -4804,6 +4905,7 @@ async function updateSchedule(payload, authUser = null) {
 
     const expectedDate = isoDateOnly(entry.data);
     const expectedTime = hhmm(entry.horario);
+    const expectedPriority = forcedPriority != null ? String(forcedPriority) : "";
     const expectedObservation = normalizeMultilineText(
       response?.payload?.observacao ||
       response?.payload?.os_observacao ||
@@ -4824,6 +4926,7 @@ async function updateSchedule(payload, authUser = null) {
             : await verifySgpObservationUpdate(config, osId, expectedObservation, sgpAuth)
         )
       : { ok: true, observation: "" };
+    const priorityVerification = await verifySgpPriorityUpdate(config, osId, expectedPriority, sgpAuth);
 
     logSgpScheduleUpdate("verification", {
       osId,
@@ -4831,12 +4934,14 @@ async function updateSchedule(payload, authUser = null) {
         data_agendamento: expectedDate,
         hora_agendamento: expectedTime,
         tecnico: entry.tecnico,
+        prioridade: expectedPriority,
         observacao: expectedObservation
       },
       confirmed: {
         data_agendamento: confirmedDate,
         hora_agendamento: confirmedTime,
         tecnico: confirmed.technician,
+        prioridade: priorityVerification.priority,
         observacao: observationVerification.observation
       }
     });
@@ -4845,6 +4950,7 @@ async function updateSchedule(payload, authUser = null) {
       confirmedDate !== expectedDate ||
       confirmedTime !== expectedTime ||
       !technicianMatchesExpected(entry.tecnico, confirmed.technician) ||
+      !priorityVerification.ok ||
       !observationVerification.ok
     ) {
       const confirmedRow = await fetchServiceOrderById(config, osId, sgpAuth).catch(() => null);
@@ -4854,12 +4960,14 @@ async function updateSchedule(payload, authUser = null) {
           data_agendamento: expectedDate,
           hora_agendamento: expectedTime,
           tecnico: entry.tecnico,
+          prioridade: expectedPriority,
           observacao: expectedObservation
         },
         confirmed: {
           data_agendamento: confirmedDate,
           hora_agendamento: confirmedTime,
           tecnico: confirmed.technician,
+          prioridade: priorityVerification.priority,
           observacao: observationVerification.observation
         },
         fields: pickSgpScheduleDebugFields(confirmedRow)
@@ -4876,12 +4984,14 @@ async function updateSchedule(payload, authUser = null) {
               data_agendamento: expectedDate,
               hora_agendamento: expectedTime,
               tecnico: entry.tecnico,
+              prioridade: expectedPriority,
               observacao: expectedObservation
             },
             confirmed: {
               data_agendamento: confirmedDate,
               hora_agendamento: confirmedTime,
               tecnico: confirmed.technician,
+              prioridade: priorityVerification.priority,
               observacao: observationVerification.observation
             }
           }
