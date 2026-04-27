@@ -3220,6 +3220,16 @@ function normalizeTechnician(raw) {
   );
 }
 
+function pickServiceOrderId(raw) {
+  return String(
+    raw?.os_id ||
+    raw?.id ||
+    raw?.cod_os ||
+    raw?.codigo ||
+    ""
+  ).trim();
+}
+
 function hasMeaningfulTechnician(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
@@ -5704,17 +5714,17 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
     const pickUniqueOpenRows = (rows) =>
       dedupeBy(
         rows.filter((row) => isExternalServiceOrder(row)).filter((row) => isOpenServiceOrder(row, openStatusIds)),
-        (row) => String(row.id || row.os_id || "")
+        (row) => pickServiceOrderId(row)
       );
 
     const uniqueRows = pickUniqueOpenRows(contractRows);
 
-    uniqueRows.sort((a, b) => Number(b.id || b.os_id || 0) - Number(a.id || a.os_id || 0));
+    uniqueRows.sort((a, b) => Number(pickServiceOrderId(b) || 0) - Number(pickServiceOrderId(a) || 0));
 
     const picked = uniqueRows.slice(0, 3);
 
     const mapped = picked.map(raw => {
-      const osId = String(raw.id || raw.os_id || "");
+      const osId = pickServiceOrderId(raw);
       return {
         osId,
         protocolo:       String(raw.ocorrencia || raw.protocolo || raw.id || ""),
