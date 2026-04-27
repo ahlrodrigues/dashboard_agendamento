@@ -497,7 +497,7 @@ function loadConfig() {
       motivo_os_padrao: 1,
       setor_padrao: 1,
       prioridade_os_padrao: 2,
-      prioridade_os_ao_agendar: 1,
+      prioridade_os_ao_agendar: 3,
       status_os_ao_agendar: 0,
       statuses_consulta: DEFAULT_STATUSES,
       permite_pre_agendamento_local: true,
@@ -2806,7 +2806,7 @@ function priorityMatchesExpected(expectedPriority, confirmedPriority) {
   if (confirmedValue && confirmedValue === expectedText) {
     return true;
   }
-  if (expectedText === "1" && confirmedLabel.includes("alta")) {
+  if (expectedText === "3" && confirmedLabel.includes("alta")) {
     return true;
   }
   return false;
@@ -4099,8 +4099,8 @@ function resolvePriorityForScheduledOs(config, entry) {
   if (Number.isFinite(desired) && desired > 0) {
     return desired;
   }
-  // No SGP desta integracao, prioridade 1 corresponde a ALTA.
-  return 1;
+  // No SGP desta integracao, prioridade 3 corresponde a ALTA.
+  return 3;
 }
 
 function resolveStatusForScheduledOs(config, entry) {
