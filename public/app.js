@@ -1534,6 +1534,30 @@ function fillScheduleFormFromSchedule(item) {
   updateSlotConflictFromForm();
 }
 
+async function hydrateScheduleFromSgp(item) {
+  const osId = String(item?.osId || "").trim();
+  if (!osId || String(item?.origem || "").trim() !== "sgp") {
+    return item;
+  }
+
+  const response = await apiFetch(`/api/os/${encodeURIComponent(osId)}`);
+  const data = await response.json();
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.message || `Nao foi possivel carregar os detalhes da OS ${osId}.`);
+  }
+
+  const hydrated = {
+    ...item,
+    tecnico: String(data.responsavel_label || data.responsavel || item.tecnico || "").trim() || item.tecnico || "",
+    data: String(data.data_agendamento_date || item.data || "").trim() || item.data || "",
+    horario: hhmm(data.hora_agendamento || item.horario || "") || item.horario || "",
+    observacao: String(data.observacao || item.observacao || "").trim() || item.observacao || ""
+  };
+
+  state.schedulesById.set(String(item.id || "").trim(), hydrated);
+  return hydrated;
+}
+
 function resetScheduleForm() {
   const today = toLocalIsoDate(new Date());
   elements.scheduleForm.reset();
@@ -1825,6 +1849,20 @@ async function handleCalendarGridClick(event) {
   const item = state.schedulesById.get(scheduleId);
   if (!item) {
     alert("Nao foi possivel localizar o agendamento.");
+    return;
+  }
+
+  if (String(item.origem || "").trim() === "sgp" && String(item.osId || "").trim()) {
+    setContractLookupStatus(`Buscando dados atualizados da OS ${item.osId}...`);
+    hydrateScheduleFromSgp(item)
+      .then((hydrated) => {
+        fillScheduleFormFromSchedule(hydrated);
+        setContractLookupStatus(`OS ${item.osId} carregada com dados atualizados.`, "success");
+      })
+      .catch((error) => {
+        fillScheduleFormFromSchedule(item);
+        setContractLookupStatus(error.message, "error");
+      });
     return;
   }
 

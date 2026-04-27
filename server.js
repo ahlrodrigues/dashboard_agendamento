@@ -938,50 +938,205 @@ function normalizePhoneDigits(value) {
   return String(value || "").replace(/\D+/g, "");
 }
 
-function pickSmsClientValues(html, requestedPhone) {
+function summarizeOptionLabels(options, limit = 5) {
+  const items = Array.isArray(options) ? options : [];
+  return items
+    .slice(0, Math.max(0, Number(limit) || 0))
+    .map((item) => String(item?.label || "").trim())
+    .filter(Boolean);
+}
+
+function pickSmsClientSelection(html, requestedPhone) {
   const options = extractHtmlSelectOptions(html, "sms_cliente").filter((item) => item.value);
   if (!options.length) {
-    return [];
+    return {
+      values: [],
+      labels: [],
+      matchType: "missing_options",
+      reason: "Campo sms_cliente sem opcoes disponiveis no formulario do SGP.",
+      requestedPhone: String(requestedPhone || "").trim(),
+      requestedDigits: normalizePhoneDigits(requestedPhone),
+      availableLabels: []
+    };
   }
 
   const targetDigits = normalizePhoneDigits(requestedPhone);
-  if (targetDigits) {
-    const exact = options.find((item) => {
-      const labelDigits = normalizePhoneDigits(item.label);
-      return labelDigits === targetDigits || labelDigits.endsWith(targetDigits) || targetDigits.endsWith(labelDigits);
-    });
+  const withMeta = options.map((item) => {
+    const label = String(item.label || "").trim();
+    const comparable = normalizeComparableText(label);
+    const digits = normalizePhoneDigits(label);
+    const scoreParts = [];
+    let score = 0;
+
+    if (targetDigits) {
+      if (digits === targetDigits) {
+        score += 120;
+        scoreParts.push("exact_digits");
+      } else if (digits.endsWith(targetDigits) || targetDigits.endsWith(digits)) {
+        score += 90;
+        scoreParts.push("suffix_digits");
+      } else if (digits.includes(targetDigits) || targetDigits.includes(digits)) {
+        score += 60;
+        scoreParts.push("contains_digits");
+      }
+    }
+
+    if (/\b(celular|whatsapp|whats|movel|m[óo]vel)\b/i.test(label)) {
+      score += 20;
+      scoreParts.push("mobile_label");
+    }
+    if (/\b(cobranca|cobran[çc]a)\b/i.test(label)) {
+      score += 10;
+      scoreParts.push("billing_label");
+    }
+    if (item.selected) {
+      score += 5;
+      scoreParts.push("selected");
+    }
+
+    return { ...item, comparable, digits, score, scoreParts };
+  });
+
+  const exactMatch = withMeta
+    .filter((item) => item.scoreParts.includes("exact_digits") || item.scoreParts.includes("suffix_digits"))
+    .sort((a, b) => b.score - a.score)[0];
+  if (exactMatch) {
+    return {
+      values: [exactMatch.value],
+      labels: [exactMatch.label],
+      matchType: exactMatch.scoreParts.includes("exact_digits") ? "exact_phone" : "suffix_phone",
+      reason: `Contato selecionado por telefone: ${exactMatch.label}`,
+      requestedPhone: String(requestedPhone || "").trim(),
+      requestedDigits: targetDigits,
+      availableLabels: summarizeOptionLabels(options)
+    };
+  }
+
+  const selected = withMeta.filter((item) => item.selected);
+  if (selected.length) {
+    return {
+      values: selected.map((item) => item.value),
+      labels: selected.map((item) => item.label),
+      matchType: "selected",
+      reason: `Contato selecionado pelo valor ja marcado no SGP: ${selected.map((item) => item.label).join(", ")}`,
+      requestedPhone: String(requestedPhone || "").trim(),
+      requestedDigits: targetDigits,
+      availableLabels: summarizeOptionLabels(options)
+    };
+  }
+
+  const bestScored = withMeta.sort((a, b) => b.score - a.score)[0];
+  if (bestScored && bestScored.score > 0) {
+    return {
+      values: [bestScored.value],
+      labels: [bestScored.label],
+      matchType: "best_scored",
+      reason: `Contato selecionado por melhor correspondencia: ${bestScored.label}`,
+      requestedPhone: String(requestedPhone || "").trim(),
+      requestedDigits: targetDigits,
+      availableLabels: summarizeOptionLabels(options)
+    };
+  }
+
+  return {
+    values: [],
+    labels: [],
+    matchType: "no_phone_match",
+    reason: targetDigits
+      ? `Nenhum contato SMS do formulario corresponde ao telefone ${targetDigits}.`
+      : "OS sem telefone elegivel para selecionar sms_cliente.",
+    requestedPhone: String(requestedPhone || "").trim(),
+    requestedDigits: targetDigits,
+    availableLabels: summarizeOptionLabels(options)
+  };
+}
+
+function pickGatewaySelection(html, preferredLabel = "AGENDAMENTO") {
+  const options = extractHtmlSelectOptions(html, "gateway_sms").filter((item) => item.value);
+  if (!options.length) {
+    return {
+      value: "",
+      label: "",
+      matchType: "missing_options",
+      reason: "Campo gateway_sms sem opcoes disponiveis no formulario do SGP.",
+      availableLabels: []
+    };
+  }
+
+  const preferredLabels = String(preferredLabel || "AGENDAMENTO")
+    .split(/[;,|]/)
+    .map((item) => normalizeComparableText(item))
+    .filter(Boolean);
+  const normalizedOptions = options.map((item) => ({
+    ...item,
+    comparable: normalizeComparableText(item.label)
+  }));
+
+  for (const preferred of preferredLabels) {
+    const exact = normalizedOptions.find((item) => item.comparable === preferred);
     if (exact) {
-      return [exact.value];
+      return {
+        value: exact.value,
+        label: exact.label,
+        matchType: "exact_label",
+        reason: `Gateway selecionado por correspondencia exata: ${exact.label}`,
+        availableLabels: summarizeOptionLabels(options)
+      };
     }
   }
 
-  const selected = options.filter((item) => item.selected).map((item) => item.value);
-  if (selected.length) {
-    return selected;
+  for (const preferred of preferredLabels) {
+    const contains = normalizedOptions.find((item) => item.comparable.includes(preferred) || preferred.includes(item.comparable));
+    if (contains) {
+      return {
+        value: contains.value,
+        label: contains.label,
+        matchType: "contains_label",
+        reason: `Gateway selecionado por correspondencia parcial: ${contains.label}`,
+        availableLabels: summarizeOptionLabels(options)
+      };
+    }
   }
 
-  return [options[0].value];
-}
-
-function pickGatewayValue(html, preferredLabel = "AGENDAMENTO") {
-  const options = extractHtmlSelectOptions(html, "gateway_sms").filter((item) => item.value);
-  if (!options.length) {
-    return "";
+  const heuristic = normalizedOptions
+    .map((item) => {
+      let score = 0;
+      if (item.comparable.includes("agend")) score += 60;
+      if (item.comparable.includes("sms")) score += 20;
+      if (item.comparable.includes("whats")) score += 15;
+      if (item.comparable.includes("cliente")) score += 10;
+      if (item.selected) score += 5;
+      return { ...item, score };
+    })
+    .sort((a, b) => b.score - a.score)[0];
+  if (heuristic && heuristic.score > 0) {
+    return {
+      value: heuristic.value,
+      label: heuristic.label,
+      matchType: "heuristic",
+      reason: `Gateway selecionado por heuristica: ${heuristic.label}`,
+      availableLabels: summarizeOptionLabels(options)
+    };
   }
 
-  const normalizedLabel = String(preferredLabel || "").trim().toLowerCase();
-  const match = options.find((item) => String(item.label || "").trim().toLowerCase() === normalizedLabel);
-  if (match) {
-    return match.value;
+  const selected = normalizedOptions.find((item) => item.selected);
+  if (selected) {
+    return {
+      value: selected.value,
+      label: selected.label,
+      matchType: "selected",
+      reason: `Gateway selecionado pelo valor ja marcado no SGP: ${selected.label}`,
+      availableLabels: summarizeOptionLabels(options)
+    };
   }
 
-  const contains = options.find((item) => String(item.label || "").toLowerCase().includes(normalizedLabel));
-  if (contains) {
-    return contains.value;
-  }
-
-  const selected = options.find((item) => item.selected);
-  return selected ? selected.value : options[0].value;
+  return {
+    value: "",
+    label: "",
+    matchType: "no_gateway_match",
+    reason: `Nenhum gateway compativel encontrado para o criterio "${preferredLabel}".`,
+    availableLabels: summarizeOptionLabels(options)
+  };
 }
 
 function resolveSendIntervalMs(config) {
@@ -1538,8 +1693,12 @@ async function getOsDetails(config, osId, credentials = null) {
     const observacao = extractSgpObservacaoValueFromHtml(html) || "";
     const conteudo = extractHtmlFieldValue(html, "conteudo") || "";
     const responsavel = extractHtmlFieldValue(html, "responsavel") || "";
+    const responsavelLabel = extractHtmlSelectSelectedLabel(html, "responsavel") || responsavel;
     const dataAgendamento = extractHtmlFieldValue(html, "data_agendamento") || "";
     const statusLabel = extractHtmlSelectSelectedLabel(html, "status");
+    const parsedSchedule = extractSgpScheduledDateTime({
+      data_agendamento: dataAgendamento
+    });
     
     console.log("[getOsDetails] Campos extraidos - anotacao:", JSON.stringify(anotacao.substring(0, 100)));
     
@@ -1549,7 +1708,10 @@ async function getOsDetails(config, osId, credentials = null) {
       observacao,
       conteudo,
       responsavel,
+      responsavel_label: responsavelLabel,
       data_agendamento: dataAgendamento,
+      data_agendamento_date: parsedSchedule.date,
+      hora_agendamento: parsedSchedule.time,
       status_label: statusLabel
     };
   } catch (error) {
@@ -1578,7 +1740,10 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
     observacao: pickSgpObservationFromRaw(row),
     conteudo: String(row.conteudo || row.descritivo || ""),
     responsavel: String(row.responsavel || ""),
+    responsavel_label: String(row.responsavel || row.tecnico_nome || row.tecnico || ""),
     data_agendamento: String(row.data_agendamento || row.os_data_agendamento || row.data_hora_agendamento || ""),
+    data_agendamento_date: extractSgpScheduledDateTime(row).date,
+    hora_agendamento: extractSgpScheduledDateTime(row).time,
     status_label: String(row.status_descricao || row.status_nome || row.status_label || "")
   };
 }
@@ -1587,20 +1752,36 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   const session = await createSgpWebSession(config, credentials);
   const form = await fetchSgpOsEditForm(config, session, osId);
   const html = form.html;
-  const gatewayOptions = extractHtmlSelectOptions(html, "gateway_sms").filter((item) => item.value);
-  const smsClientOptions = extractHtmlSelectOptions(html, "sms_cliente").filter((item) => item.value);
   const forcedPriority = resolvePriorityForScheduledOs(config, entry);
   const forcedStatus = resolveStatusForScheduledOs(config, entry);
   const shouldRequestConfirmation = canRequestCustomerConfirmation(entry);
   const hasDefinedScheduleTime = Boolean(entry?.data && entry?.horario && entry.horario !== "A definir");
   const existingScheduleValue = extractHtmlFieldValue(html, "data_agendamento");
-  const smsClientValues = shouldRequestConfirmation ? pickSmsClientValues(html, entry.telefone) : [];
-  const gatewayValue = shouldRequestConfirmation
-    ? pickGatewayValue(
+  const smsClientSelection = shouldRequestConfirmation
+    ? pickSmsClientSelection(html, entry.telefone)
+    : {
+        values: [],
+        labels: [],
+        matchType: "not_requested",
+        reason: "Confirmacao nao solicitada para esta OS.",
+        requestedPhone: String(entry?.telefone || "").trim(),
+        requestedDigits: normalizePhoneDigits(entry?.telefone),
+        availableLabels: []
+      };
+  const gatewaySelection = shouldRequestConfirmation
+    ? pickGatewaySelection(
         html,
         String(config.agendamento?.gateway_sms_agendamento_label || "AGENDAMENTO").trim() || "AGENDAMENTO"
       )
-    : "";
+    : {
+        value: "",
+        label: "",
+        matchType: "not_requested",
+        reason: "Confirmacao nao solicitada para esta OS.",
+        availableLabels: []
+      };
+  const smsClientValues = Array.isArray(smsClientSelection.values) ? smsClientSelection.values : [];
+  const gatewayValue = String(gatewaySelection.value || "").trim();
   const responsibleValue = hasMeaningfulTechnician(entry.tecnico)
     ? resolveHtmlSelectValue(html, "responsavel", entry.tecnico)
     : extractHtmlFieldValue(html, "responsavel");
@@ -1651,22 +1832,38 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     payload.sms_cliente = smsClientValues;
   }
 
-  const gatewayLabel = gatewayOptions.find((item) => item.value === String(payload.gateway_sms || "").trim())?.label || "";
-  const smsClientLabels = smsClientOptions
-    .filter((item) => smsClientValues.includes(item.value))
-    .map((item) => item.label);
+  const gatewayLabel = gatewaySelection.label || "";
+  const smsClientLabels = smsClientSelection.labels || [];
+  const confirmationDispatchRequested = Boolean(shouldRequestConfirmation && smsClientValues.length && payload.gateway_sms);
+  const dispatchBlockedReason = !shouldRequestConfirmation
+    ? "Confirmacao nao elegivel: data/técnico ausentes."
+    : !payload.gateway_sms
+      ? gatewaySelection.reason
+      : !smsClientValues.length
+        ? smsClientSelection.reason
+        : "";
 
   console.log("[updateScheduleViaSgpWebForm] Payload observacao:", payload.observacao);
   console.log("[CONFIRMATION_DISPATCH_DEBUG] request", JSON.stringify({
     osId: String(osId || "").trim(),
+    credentialUser: String(session.username || "").trim() || "desconhecido",
     gatewaySms: String(payload.gateway_sms || "").trim(),
     gatewayLabel,
+    gatewayMatchType: gatewaySelection.matchType,
+    gatewayReason: gatewaySelection.reason,
+    gatewayAvailableLabels: gatewaySelection.availableLabels,
     smsCliente: smsClientValues,
     smsClienteLabels: smsClientLabels,
+    smsClienteMatchType: smsClientSelection.matchType,
+    smsClienteReason: smsClientSelection.reason,
+    smsClienteRequestedPhone: smsClientSelection.requestedPhone,
+    smsClienteAvailableLabels: smsClientSelection.availableLabels,
     responsavel: String(payload.responsavel || "").trim(),
     tecnicoSolicitado: String(entry.tecnico || "").trim(),
     hasSmsTecnico: Boolean(payload.sms_tecnico),
-    hasEncerraOcorrencia: Boolean(payload.encerra_ocorrencia)
+    hasEncerraOcorrencia: Boolean(payload.encerra_ocorrencia),
+    confirmationDispatchRequested,
+    dispatchBlockedReason
   }));
   
   const body = new URLSearchParams();
@@ -1736,8 +1933,7 @@ const checkSessionExpired = (response, htmlText) => {
     bodySummary: responseSummary
   }));
 
-  const dispatchRequested = Boolean(smsClientValues.length && payload.gateway_sms);
-  if (dispatchRequested && response.status >= 200 && response.status < 400) {
+  if (confirmationDispatchRequested && response.status >= 200 && response.status < 400) {
     const existingEntry = readConfirmationDispatchEntry(osId) || {};
     const dispatchKind = String(entry?.dispatchKind || existingEntry.dispatchKind || "inicial").trim() || "inicial";
     const nowIso = new Date().toISOString();
@@ -1760,7 +1956,10 @@ const checkSessionExpired = (response, htmlText) => {
       resendCount,
       responseStatus: response.status,
       responseLocation: response.headers.get("location") || "",
-      responseSummary
+      responseSummary,
+      credentialUser: String(session.username || "").trim() || "",
+      gatewayMatchType: gatewaySelection.matchType,
+      smsClienteMatchType: smsClientSelection.matchType
     });
   }
 
@@ -1769,7 +1968,13 @@ const checkSessionExpired = (response, htmlText) => {
     payload,
     status: response.status,
     location: response.headers.get("location") || "",
-    confirmationDispatchRequested: dispatchRequested
+    confirmationDispatchRequested,
+    dispatchBlockedReason,
+    credentialUser: String(session.username || "").trim() || "",
+    selection: {
+      gateway: gatewaySelection,
+      smsCliente: smsClientSelection
+    }
   };
 }
 
@@ -2035,18 +2240,30 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
         throw new Error(mutationError);
       }
       if (!response?.confirmationDispatchRequested) {
-        const manualMessage = "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido).";
+        const manualMessage = String(
+          response?.dispatchBlockedReason ||
+          "Confirmacao nao solicitada (gateway/sms_cliente ausente no SGP ou criterio nao atendido)."
+        ).trim();
         writeConfirmationDispatchEntry(osId, {
           state: "manual",
           manualAt: new Date().toISOString(),
-          errorMessage: manualMessage
+          errorMessage: manualMessage,
+          credentialUser: String(response?.credentialUser || "").trim(),
+          gatewayMatchType: String(response?.selection?.gateway?.matchType || "").trim(),
+          gatewayReason: String(response?.selection?.gateway?.reason || "").trim(),
+          gatewayAvailableLabels: response?.selection?.gateway?.availableLabels || [],
+          smsClienteMatchType: String(response?.selection?.smsCliente?.matchType || "").trim(),
+          smsClienteReason: String(response?.selection?.smsCliente?.reason || "").trim(),
+          smsClienteAvailableLabels: response?.selection?.smsCliente?.availableLabels || []
         });
         return {
           ok: false,
           state: "manual",
           id: itemId,
           osId,
-          message: manualMessage
+          message: manualMessage,
+          credentialUser: String(response?.credentialUser || "").trim(),
+          selection: response?.selection || null
         };
       }
       writeConfirmationCache(osId, await fetchConfirmationDetailsForOs(config, osId, currentCredentials).catch(() => ({
@@ -2062,7 +2279,9 @@ async function queueConfirmationDispatch(config, item, credentials = null, optio
         state: "requested",
         id: itemId,
         osId,
-        message: "Confirmacao solicitada ao SGP."
+        message: "Confirmacao solicitada ao SGP.",
+        credentialUser: String(response?.credentialUser || "").trim(),
+        selection: response?.selection || null
       };
     };
 
@@ -3038,6 +3257,72 @@ function normalizeSchedule(config, raw, source = "sgp") {
   };
 }
 
+function mergeSgpDetailsIntoScheduleItem(item, details) {
+  if (!item || !details || typeof details !== "object") {
+    return item;
+  }
+
+  const nextTechnician = String(
+    details.responsavel_label ||
+    details.responsavel ||
+    item.tecnico ||
+    ""
+  ).trim();
+  const nextDate = isoDateOnly(
+    details.data_agendamento_date ||
+    details.data_agendamento ||
+    item.data
+  );
+  const nextTime = normalizeSlot(details.hora_agendamento || item.horario);
+  const nextObservation = String(details.observacao || item.observacao || "").trim();
+
+  item.tecnico = nextTechnician || item.tecnico;
+  item.data = nextDate || item.data;
+  item.horario = nextTime || item.horario;
+  item.hasScheduledDate = Boolean(item.data);
+  if (nextObservation) {
+    const extractedObs = extractDashboardCreatedBy(nextObservation);
+    item.observacao = extractedObs.text;
+    if (extractedObs.createdBy) {
+      item.createdBy = extractedObs.createdBy;
+    }
+  }
+  item.status = item.data && hasMeaningfulTechnician(item.tecnico)
+    ? (item.horario && item.horario !== "A definir" ? "agendado" : "itinerario")
+    : "pre_agendado";
+  return item;
+}
+
+async function enrichSchedulesWithSgpDetails(config, schedules, credentials = null) {
+  const pending = (Array.isArray(schedules) ? schedules : []).filter((item) => {
+    if (item?.origem !== "sgp" || !String(item.osId || "").trim()) {
+      return false;
+    }
+    const missingDate = !isoDateOnly(item.data);
+    const missingTime = !hhmm(item.horario) || item.horario === "A definir";
+    const missingTechnician = !hasMeaningfulTechnician(item.tecnico);
+    return missingDate || missingTime || missingTechnician;
+  });
+
+  if (!pending.length) {
+    return schedules;
+  }
+
+  const concurrency = 2;
+  await runWithConcurrencyLimit(
+    pending,
+    concurrency,
+    async (item) => {
+      const details = await getOsDetails(config, item.osId, credentials).catch(() => null);
+      if (details?.ok) {
+        mergeSgpDetailsIntoScheduleItem(item, details);
+      }
+    }
+  );
+
+  return schedules;
+}
+
 function extractSgpScheduledDateTime(raw) {
   const dateOnlyCandidates = [
     raw?.data_agendamento,
@@ -3568,8 +3853,9 @@ async function getDashboardData(query, authUser = null) {
 	    schedules = sgpRows
 	      .filter((item) => isExternalServiceOrder(item))
 	      .filter((item) => isOpenServiceOrder(item, openStatusIds))
-	      .map((item) => normalizeSchedule(config, item, "sgp"))
-	      .filter((item) => item.data);
+	      .map((item) => normalizeSchedule(config, item, "sgp"));
+	    schedules = await enrichSchedulesWithSgpDetails(config, schedules, sgpAuth);
+	    schedules = schedules.filter((item) => item.data);
 	    schedules = await enrichSchedulesWithConfirmation(config, schedules, sgpAuth);
 	    if (!schedules.length) {
       sourceMode = "mock";
@@ -4855,7 +5141,9 @@ async function requestConfirmationDispatch(payload, authUser = null) {
       id: String(item?.id || "").trim(),
       osId: String(item?.osId || "").trim(),
       state: String(item?.state || "error").trim(),
-      reason: String(item?.message || "Falha ao solicitar envio ao SGP.").trim()
+      reason: String(item?.message || "Falha ao solicitar envio ao SGP.").trim(),
+      credentialUser: String(item?.credentialUser || "").trim(),
+      selection: item?.selection || null
     }));
 
   if (!sent.length) {
@@ -4880,7 +5168,12 @@ async function requestConfirmationDispatch(payload, authUser = null) {
         ? `${sent.length} OS enviada(s) para confirmacao; ${failed.length} falhou(aram).`
         : `${sent.length} OS enviada(s) para confirmacao via SGP.`,
       queued: [],
-      sent: sent.map((item) => ({ id: item.id, osId: item.osId })),
+      sent: sent.map((item) => ({
+        id: item.id,
+        osId: item.osId,
+        credentialUser: String(item?.credentialUser || "").trim(),
+        selection: item?.selection || null
+      })),
       failed,
       skipped
     }
@@ -5345,7 +5638,7 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
 
     const picked = uniqueRows.slice(0, 3);
 
-    return picked.map(raw => {
+    const mapped = picked.map(raw => {
       const osId = String(raw.id || raw.os_id || "");
       return {
         osId,
@@ -5364,6 +5657,25 @@ async function lookupOpenOsForContract(config, contractId, operatorAuth = null) 
 	        osUrl:           buildOsUrl(config, osId)
 	      };
 	    }).filter(x => x.osId);
+
+    await runWithConcurrencyLimit(
+      mapped,
+      2,
+      async (item) => {
+        const details = await getOsDetails(config, item.osId, operatorAuth).catch(() => null);
+        if (!details?.ok) {
+          return;
+        }
+        item.responsavel = String(details.responsavel_label || details.responsavel || item.responsavel || "").trim();
+        item.data_agendamento = String(details.data_agendamento_date || item.data_agendamento || "").trim();
+        item.hora_agendamento = String(details.hora_agendamento || item.hora_agendamento || "").trim();
+        if (String(details.observacao || "").trim()) {
+          item.observacao = String(details.observacao || "").trim();
+        }
+      }
+    );
+
+    return mapped;
   } catch (error) {
     console.error("Falha ao organizar OS abertas/pendentes:", error.message);
     return [];
