@@ -156,6 +156,9 @@ const CONFIRMATION_RESEND_SECOND_MS = 4 * 60 * 60 * 1000;
 const CONFIRMATION_MANUAL_AFTER_MS = 6 * 60 * 60 * 1000;
 const CONFIRMATION_CACHE_TTL_MS = 5 * 60 * 1000;
 const confirmationStatusCache = new Map();
+const dashboardDataCache = new Map();
+const dashboardDataInflight = new Map();
+const sgpPopsCache = new Map();
 let sgpDispatchQueue = Promise.resolve();
 let lastSgpDispatchAt = 0;
 let confirmationResendJobTimer = null;
@@ -197,6 +200,10 @@ function ensureDataDir() {
   }
 }
 
+function deepCloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
 function readJson(filePath, fallback = null) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -220,6 +227,7 @@ function readScheduleFlags() {
 
 function writeScheduleFlags(data) {
   writeJson(SCHEDULE_FLAGS_PATH, data && typeof data === "object" && !Array.isArray(data) ? data : {});
+  invalidateDashboardDataCache();
 }
 
 function truthyFlag(value) {
@@ -311,6 +319,7 @@ function readBlockedSlots() {
 
 function writeBlockedSlots(items) {
   writeJson(BLOCKED_SLOTS_PATH, Array.isArray(items) ? items : []);
+  invalidateDashboardDataCache();
 }
 
 function normalizeBlockedSlot(entry) {
@@ -486,6 +495,8 @@ function loadConfig() {
       horarios_padrao: DEFAULT_SLOTS,
       intervalo_envio_base_ms: DEFAULT_SEND_INTERVAL_MS,
       timeout_sgp_ms: DEFAULT_TIMEOUT_MS,
+      cache_dashboard_ms: 45000,
+      cache_pops_ms: 600000,
       ...(config.dashboard || {})
     },
     agendamento: {
@@ -510,6 +521,106 @@ function loadConfig() {
       ...(config.auth || {})
     }
   };
+}
+
+function resolveDashboardCacheTtlMs(config) {
+  const value = Number(config.dashboard?.cache_dashboard_ms);
+  if (Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return 45000;
+}
+
+function resolveSgpPopsCacheTtlMs(config) {
+  const value = Number(config.dashboard?.cache_pops_ms);
+  if (Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return 600000;
+}
+
+function buildSgpCacheIdentity(config, operatorAuth = null) {
+  if (hasRobotSgpCredentials(config) || hasAppTokenAuth(config)) {
+    return "integration";
+  }
+  return String(operatorAuth?.username || "anonymous").trim() || "anonymous";
+}
+
+function buildDashboardCacheKey({ startDate, endDate, selectedDate, authIdentity }) {
+  return JSON.stringify({
+    selectedDate: String(selectedDate || "").trim(),
+    startDate: String(startDate || "").trim(),
+    endDate: String(endDate || "").trim(),
+    authIdentity: String(authIdentity || "").trim()
+  });
+}
+
+function readDashboardCache(key, ttlMs) {
+  const entry = dashboardDataCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if ((Date.now() - entry.createdAt) > ttlMs) {
+    dashboardDataCache.delete(key);
+    return null;
+  }
+  return deepCloneJson(entry.value);
+}
+
+function writeDashboardCache(key, value) {
+  dashboardDataCache.set(key, {
+    createdAt: Date.now(),
+    value: deepCloneJson(value)
+  });
+}
+
+function invalidateDashboardDataCache() {
+  dashboardDataCache.clear();
+  dashboardDataInflight.clear();
+}
+
+async function getOrCreateDashboardCache(key, ttlMs, buildValue) {
+  const cached = readDashboardCache(key, ttlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const inflight = dashboardDataInflight.get(key);
+  if (inflight) {
+    return deepCloneJson(await inflight);
+  }
+
+  const promise = (async () => {
+    const value = await buildValue();
+    writeDashboardCache(key, value);
+    return value;
+  })();
+
+  dashboardDataInflight.set(key, promise);
+  try {
+    return deepCloneJson(await promise);
+  } finally {
+    dashboardDataInflight.delete(key);
+  }
+}
+
+function readSgpPopsCache(key, ttlMs) {
+  const entry = sgpPopsCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  if ((Date.now() - entry.createdAt) > ttlMs) {
+    sgpPopsCache.delete(key);
+    return null;
+  }
+  return [...entry.value];
+}
+
+function writeSgpPopsCache(key, value) {
+  sgpPopsCache.set(key, {
+    createdAt: Date.now(),
+    value: Array.isArray(value) ? [...value] : []
+  });
 }
 
 async function fetchSgpUserInfo(config, username, password) {
@@ -771,6 +882,7 @@ function writeConfirmationDispatchEntry(osId, entry) {
   if (cached) {
     writeConfirmationCache(key, applyConfirmationDispatchState(cached, log[key]));
   }
+  invalidateDashboardDataCache();
 }
 
 function splitSetCookieHeader(value) {
@@ -2669,19 +2781,28 @@ async function listSgpPops(config, operatorAuth = null) {
     return [];
   }
 
+  const cacheKey = `${buildSgpCacheIdentity(config, operatorAuth)}::${endpoint}`;
+  const ttlMs = resolveSgpPopsCacheTtlMs(config);
+  const cached = readSgpPopsCache(cacheKey, ttlMs);
+  if (cached) {
+    return cached;
+  }
+
   const response = await postToSgp(config, endpoint, {}, operatorAuth);
   const rows = extractListFromResponse(response);
   if (!Array.isArray(rows)) {
     throw new Error("Formato inesperado na lista de POPs.");
   }
 
-  return dedupeBy(
+  const normalized = dedupeBy(
     rows
       .filter(isPopActive)
       .map(normalizePopName)
       .filter(Boolean),
     (value) => value
   ).sort((a, b) => a.localeCompare(b));
+  writeSgpPopsCache(cacheKey, normalized);
+  return normalized;
 }
 
 async function fetchServiceOrderById(config, osId, operatorAuth = null) {
@@ -2968,6 +3089,7 @@ function saveManualSchedule(entry) {
   const rows = readManualSchedules();
   rows.push(entry);
   writeJson(MANUAL_SCHEDULES_PATH, rows);
+  invalidateDashboardDataCache();
   return entry;
 }
 
@@ -2991,6 +3113,7 @@ function updateManualSchedule(entryId, nextEntry) {
   }
 
   writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  invalidateDashboardDataCache();
   return updated;
 }
 
@@ -3001,6 +3124,7 @@ function deleteManualSchedule(entryId) {
     return false;
   }
   writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  invalidateDashboardDataCache();
   return true;
 }
 
@@ -3011,6 +3135,7 @@ function removeManualSchedulesByMatcher(matcher) {
     return 0;
   }
   writeJson(MANUAL_SCHEDULES_PATH, nextRows);
+  invalidateDashboardDataCache();
   return rows.length - nextRows.length;
 }
 
@@ -3931,9 +4056,7 @@ async function enrichSchedulesWithConfirmation(config, schedules, credentials = 
   return schedules;
 }
 
-async function getDashboardData(query, authUser = null) {
-  const config = loadConfig();
-  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+async function buildDashboardBaseData(config, { startDate, endDate, selectedDate }, operatorAuth = null) {
   const sgpAuth = resolveSgpInteractionAuth(config, operatorAuth);
   const openStatusIds = new Set(
     (Array.isArray(config.agendamento?.statuses_consulta) && config.agendamento.statuses_consulta.length
@@ -3941,20 +4064,9 @@ async function getDashboardData(query, authUser = null) {
       : DEFAULT_STATUSES
     ).map((value) => String(value))
   );
-  const today = toLocalIsoDate(new Date());
-  const selectedDate = isoDateOnly(query.get("data")) || today;
-  const startDate = isoDateOnly(query.get("inicio")) || plusDays(selectedDate, -Number(config.dashboard.janela_dias_passado || 7));
-  const endDate = isoDateOnly(query.get("fim")) || plusDays(selectedDate, Number(config.dashboard.janela_dias_futuro || 14));
-  const search = String(query.get("busca") || "").trim();
-  const status = String(query.get("status") || "todos").trim().toLowerCase();
-  const pops = String(query.get("pops") || "")
-    .split(",")
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
   const slots = Array.isArray(config.dashboard.horarios_padrao) && config.dashboard.horarios_padrao.length
     ? config.dashboard.horarios_padrao
     : DEFAULT_SLOTS;
-
   let sourceMode = "sgp";
   let notices = [];
   let schedules = [];
@@ -4020,9 +4132,7 @@ async function getDashboardData(query, authUser = null) {
   schedules = schedules.filter((item) => item.hasScheduledDate && item.data >= startDate && item.data <= endDate);
   schedules.sort((a, b) => `${a.data} ${a.horario}`.localeCompare(`${b.data} ${b.horario}`));
 
-  const filtered = filterSchedules(schedules, { search, status, pops });
   const serializedSchedules = schedules.map(serializeSchedule);
-  const filteredSerializedSchedules = filtered.map(serializeSchedule);
   const summary = summarizeSchedules(serializedSchedules);
   const grid = buildGrid(serializedSchedules, startDate, slots);
   const scheduleRoutes = Array.from(new Set(serializedSchedules.map((item) => String(item.rota || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
@@ -4030,10 +4140,6 @@ async function getDashboardData(query, authUser = null) {
   const availableRoutes = Array.from(new Set((Array.isArray(sgpPops) ? sgpPops : scheduleRoutes))).sort((a, b) => a.localeCompare(b));
 
   return {
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    dashboardVersion: DASHBOARD_VERSION,
-    autoRefreshSeconds: Number(config.dashboard.atualizacao_segundos || 300),
     selectedDate,
     period: {
       startDate,
@@ -4049,17 +4155,41 @@ async function getDashboardData(query, authUser = null) {
     },
     summary,
     filters: {
-      search,
-      status,
-      pops
+      search: "",
+      status: "todos",
+      pops: []
     },
     availableRoutes,
     grid,
-    schedules: filteredSerializedSchedules,
+    schedules: serializedSchedules
+  };
+}
+
+async function getDashboardData(query, authUser = null) {
+  const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  const today = toLocalIsoDate(new Date());
+  const selectedDate = isoDateOnly(query.get("data")) || today;
+  const startDate = isoDateOnly(query.get("inicio")) || plusDays(selectedDate, -Number(config.dashboard.janela_dias_passado || 7));
+  const endDate = isoDateOnly(query.get("fim")) || plusDays(selectedDate, Number(config.dashboard.janela_dias_futuro || 14));
+  const authIdentity = buildSgpCacheIdentity(config, operatorAuth);
+  const cacheKey = buildDashboardCacheKey({ startDate, endDate, selectedDate, authIdentity });
+  const ttlMs = resolveDashboardCacheTtlMs(config);
+  const baseData = await getOrCreateDashboardCache(
+    cacheKey,
+    ttlMs,
+    () => buildDashboardBaseData(config, { startDate, endDate, selectedDate }, operatorAuth)
+  );
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    dashboardVersion: DASHBOARD_VERSION,
+    autoRefreshSeconds: Number(config.dashboard.atualizacao_segundos || 300),
+    ...baseData,
     isAdmin: Boolean(authUser?.isAdmin),
     isOperator: Boolean(authUser?.isOperator)
   };
-  console.log("getDashboardData - authUser.isAdmin:", authUser?.isAdmin, "authUser.isOperator:", authUser?.isOperator);
 }
 
 function toScheduledDateTime(date, time) {
@@ -5575,6 +5705,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await createSchedule(payload, req.authUser);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -5586,6 +5719,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await updateSchedule(payload, req.authUser);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -5597,6 +5733,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await deleteSchedule(payload, req.authUser);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -5608,6 +5747,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await createBlockedSlot(payload, req.authUser);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -5619,6 +5761,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await removeBlockedSlot(payload);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }
@@ -5634,6 +5779,9 @@ const server = http.createServer(async (req, res) => {
       }
       const payload = await collectRequestBody(req);
       const result = await requestConfirmationDispatch(payload, req.authUser);
+      if (result.body?.ok) {
+        invalidateDashboardDataCache();
+      }
       sendJson(res, result.statusCode, result.body);
       return;
     }

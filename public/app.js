@@ -1,5 +1,7 @@
 const state = {
   data: null,
+  visibleSchedules: [],
+  visibleGrid: null,
   schedulesById: new Map(),
   selectedScheduleIds: new Set(),
   expandedCalendarCells: new Set(),
@@ -932,6 +934,118 @@ function renderNotices(notices) {
     .join("");
 }
 
+function getCurrentDashboardFilters() {
+  return {
+    search: String(elements.searchFilter?.value || "").trim().toLowerCase(),
+    status: String(elements.statusFilter?.value || "todos").trim().toLowerCase(),
+    selectedRoutes: new Set(
+      Array.from(elements.routeFilter?.selectedOptions || [])
+        .map((option) => normalizeRouteFilterKey(option.value))
+        .filter(Boolean)
+    )
+  };
+}
+
+function matchesDashboardFilters(item, filters = getCurrentDashboardFilters()) {
+  const confirmationStatus = String(item.confirmationStatus || "").trim();
+
+  if (filters.status && filters.status !== "todos") {
+    if (filters.status === "confirmacao_solicitada") {
+      if (!["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(confirmationStatus)) {
+        return false;
+      }
+    } else if (filters.status === "confirmacao_confirmada") {
+      if (confirmationStatus !== "confirmado") {
+        return false;
+      }
+    } else if ([
+      "sem_confirmacao",
+      "na_fila_envio",
+      "processando_envio",
+      "aguardando_confirmacao",
+      "reenvio_1",
+      "reenvio_2",
+      "envio_manual",
+      "rejeitado",
+      "erro_envio"
+    ].includes(filters.status)) {
+      if (confirmationStatus !== filters.status) {
+        return false;
+      }
+    } else if (item.status !== filters.status) {
+      return false;
+    }
+  }
+
+  if (filters.search) {
+    const haystack = [
+      item.cliente,
+      item.protocolo,
+      item.contrato,
+      item.telefone,
+      item.rota,
+      item.tecnico
+    ].join(" ").toLowerCase();
+    if (!haystack.includes(filters.search)) {
+      return false;
+    }
+  }
+
+  const itemRouteKey = isTechnicianRouteModeEnabled()
+    ? normalizeTechnicianKey(getDisplayTechnicianName(item.tecnico))
+    : normalizePopKey(item.rota);
+  if (filters.selectedRoutes.size && !filters.selectedRoutes.has(itemRouteKey)) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildFilteredGrid(baseGrid, rows = []) {
+  if (!baseGrid?.days || !baseGrid?.slots) {
+    return { days: [], slots: [], cells: {} };
+  }
+
+  const cells = {};
+  for (const day of baseGrid.days) {
+    cells[day.date] = {};
+    for (const slot of baseGrid.slots) {
+      cells[day.date][slot] = [];
+    }
+  }
+
+  for (const item of rows) {
+    const slot = item.status === "itinerario" ? "Itinerario" : (item.horario || "A definir");
+    if (!cells[item.data]) {
+      continue;
+    }
+    if (!cells[item.data][slot]) {
+      cells[item.data][slot] = [];
+    }
+    cells[item.data][slot].push(item);
+  }
+
+  return {
+    days: baseGrid.days,
+    slots: baseGrid.slots,
+    cells
+  };
+}
+
+function applyDashboardView() {
+  if (!state.data) {
+    return;
+  }
+
+  const filters = getCurrentDashboardFilters();
+  const visibleSchedules = state.data.schedules.filter((item) => matchesDashboardFilters(item, filters));
+  state.visibleSchedules = visibleSchedules;
+  state.visibleGrid = buildFilteredGrid(state.data.grid, visibleSchedules);
+  renderCalendar(state.visibleGrid);
+  renderTable(visibleSchedules);
+  updateSelectionControls();
+}
+
 function renderBlockPopSelect(routes = []) {
   if (!elements.blockRotaSelect) {
     return;
@@ -961,10 +1075,8 @@ function renderCalendar(grid) {
     for (const day of grid.days) {
       const cellKey = `${day.date}__${slot}`;
       const items = (grid.cells[day.date]?.[slot] || []).map((item) => state.schedulesById.get(item.id) || item);
-      const visibility = items.map((item) => ({ item, isVisible: matchesCurrentFilters(item) }));
-      const visibleItems = visibility.filter((entry) => entry.isVisible).map((entry) => entry.item);
-      const blockedItems = visibleItems.filter(isBlockedScheduleItem);
-      const scheduleItems = visibleItems.filter((item) => !isBlockedScheduleItem(item));
+      const blockedItems = items.filter(isBlockedScheduleItem);
+      const scheduleItems = items.filter((item) => !isBlockedScheduleItem(item));
       const hiddenOverflowItems = scheduleItems.length > 1 ? scheduleItems.slice(1) : [];
       const shouldExpand = hiddenOverflowItems.length ? state.expandedCalendarCells.has(cellKey) : false;
 
@@ -1009,12 +1121,11 @@ function renderChip(item) {
 	  const routeLabel = escapeHtml(item.rota || "");
 	  const reason = String(item.observacao || "").trim();
 	  const title = reason ? ` title="${escapeHtml(reason)}"` : "";
-	  const hiddenByFilter = !matchesCurrentFilters(item);
 	  const unblockButton = state.isAdmin
 	    ? `<button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>`
 	    : "";
 	  return `
-	    <div class="chip bloqueado${hiddenByFilter ? " is-hidden-by-filter" : ""}"${title} tabindex="-1">
+	    <div class="chip bloqueado"${title} tabindex="-1">
 	      <div class="chip-actions">
 	        <span></span>
 	        ${unblockButton}
@@ -1038,7 +1149,6 @@ function renderChip(item) {
   const selected = state.selectedScheduleIds.has(item.id);
   const confirmationAvailabilityReason = getConfirmationAvailabilityReason(item);
   const canSendConfirmation = !confirmationAvailabilityReason;
-  const hiddenByFilter = !matchesCurrentFilters(item);
   const duplicatePeriodClass = item.duplicatePeriod ? " is-duplicate-period" : "";
   const selectTitle = canSendConfirmation
     ? (selected ? "Desmarcar OS para envio" : "Marcar OS para envio")
@@ -1053,7 +1163,7 @@ function renderChip(item) {
     ? ` title="${escapeHtml(`OS ${String(item.osId || item.protocolo || "").trim()}`)}"`
     : ` title="${escapeHtml(confirmationAvailabilityReason)}"`;
   return `
-    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${hiddenByFilter ? " is-hidden-by-filter" : ""}${duplicatePeriodClass}"${confirmationTitle} tabindex="-1">
+    <div class="chip ${item.status} ${confirmationStatusClass(item.confirmationStatus)}${selected ? " is-selected" : ""}${duplicatePeriodClass}"${confirmationTitle} tabindex="-1">
       <div class="chip-actions">
         ${selectButton}
         ${deleteButton}
@@ -1066,69 +1176,7 @@ function renderChip(item) {
 }
 
 function matchesCurrentFilters(item) {
-  const search = String(elements.searchFilter?.value || "").trim().toLowerCase();
-  const status = String(elements.statusFilter?.value || "todos").trim().toLowerCase();
-  const selectedRoutes = new Set(
-    Array.from(elements.routeFilter?.selectedOptions || [])
-      .map((option) => normalizeRouteFilterKey(option.value))
-      .filter(Boolean)
-  );
-  const confirmationStatus = String(item.confirmationStatus || "").trim();
-
-  if (status && status !== "todos") {
-    if (status === "confirmacao_solicitada") {
-      if (!["na_fila_envio", "processando_envio", "aguardando_confirmacao", "reenvio_1", "reenvio_2"].includes(confirmationStatus)) {
-        return false;
-      }
-    } else if (status === "confirmacao_confirmada") {
-      if (confirmationStatus !== "confirmado") {
-        return false;
-      }
-    } else if ([
-      "sem_confirmacao",
-      "na_fila_envio",
-      "processando_envio",
-      "aguardando_confirmacao",
-      "reenvio_1",
-      "reenvio_2",
-      "envio_manual",
-      "rejeitado",
-      "erro_envio"
-    ].includes(status)) {
-      if (confirmationStatus !== status) {
-        return false;
-      }
-    } else if (item.status !== status) {
-      return false;
-    }
-  }
-
-  if (!search) {
-    if (!selectedRoutes.size) {
-      return true;
-    }
-  } else {
-    const haystack = [
-      item.cliente,
-      item.protocolo,
-      item.contrato,
-      item.telefone,
-      item.rota,
-      item.tecnico
-    ].join(" ").toLowerCase();
-    if (!haystack.includes(search)) {
-      return false;
-    }
-  }
-
-  const itemRouteKey = isTechnicianRouteModeEnabled()
-    ? normalizeTechnicianKey(getDisplayTechnicianName(item.tecnico))
-    : normalizePopKey(item.rota);
-  if (selectedRoutes.size && !selectedRoutes.has(itemRouteKey)) {
-    return false;
-  }
-
-  return true;
+  return matchesDashboardFilters(item);
 }
 
 function getSelectedRoutes() {
@@ -1177,24 +1225,27 @@ function collectSchedulesFromGridData(grid) {
   return Array.from(byId.values());
 }
 
-function getAvailableRouteFilterOptions(data = state.data) {
-  const rows = collectSchedulesFromGridData(data?.grid);
+function getAvailableTechnicianFilterOptions(data = state.data) {
+  const rows = Array.isArray(data?.schedules) ? data.schedules : collectSchedulesFromGridData(data?.grid);
   const values = rows
-    .map((item) => (
-      isTechnicianRouteModeEnabled()
-        ? getDisplayTechnicianName(item?.tecnico)
-        : String(item?.rota || "").trim()
-    ))
+    .map((item) => getDisplayTechnicianName(item?.tecnico))
+    .filter(Boolean);
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function getAvailableRouteFilterOptions(data = state.data) {
+  const rows = Array.isArray(data?.schedules) ? data.schedules : collectSchedulesFromGridData(data?.grid);
+  if (isTechnicianRouteModeEnabled()) {
+    return getAvailableTechnicianFilterOptions(data);
+  }
+  const values = rows
+    .map((item) => String(item?.rota || "").trim())
     .filter(Boolean);
   return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
 }
 
 function getAvailableTechnicianOptions(data = state.data) {
-  const rows = collectSchedulesFromGridData(data?.grid);
-  const values = rows
-    .map((item) => getDisplayTechnicianName(item?.tecnico))
-    .filter(Boolean);
-  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+  return getAvailableTechnicianFilterOptions(data);
 }
 
 function renderScheduleTechnicianOptions(selectedValue = "", data = state.data) {
@@ -1217,7 +1268,7 @@ function renderScheduleTechnicianOptions(selectedValue = "", data = state.data) 
 }
 
 function collectSchedulesFromGrid() {
-  return collectSchedulesFromGridData(state.data?.grid);
+  return Array.isArray(state.data?.schedules) ? state.data.schedules : collectSchedulesFromGridData(state.data?.grid);
 }
 
 function findTechnicianForPop(selectedPop) {
@@ -1596,14 +1647,13 @@ function statusLabel(status) {
 }
 
 function renderTable(rows) {
-  const filteredRows = rows.filter((item) => matchesCurrentFilters(item));
-  elements.tableCount.textContent = `${filteredRows.length} registros`;
-  if (!filteredRows.length) {
+  elements.tableCount.textContent = `${rows.length} registros`;
+  if (!rows.length) {
     elements.scheduleTableBody.innerHTML = `<tr><td class="empty-state" colspan="6">Nenhum agendamento encontrado para os filtros atuais.</td></tr>`;
     return;
   }
 
-  elements.scheduleTableBody.innerHTML = filteredRows
+  elements.scheduleTableBody.innerHTML = rows
     .map(
       (item) => `
         <tr class="schedule-row${item.duplicatePeriod ? " is-duplicate-period" : ""}">
@@ -1655,16 +1705,7 @@ async function loadDashboard() {
   if (elements.endDateFilter.value) {
     params.set("fim", elements.endDateFilter.value);
   }
-  if (elements.statusFilter.value) {
-    params.set("status", elements.statusFilter.value);
-  }
   const selectedRoutes = getSelectedRoutes();
-  if (!isTechnicianRouteModeEnabled() && selectedRoutes.length) {
-    params.set("pops", selectedRoutes.join(","));
-  }
-  if (elements.searchFilter.value.trim()) {
-    params.set("busca", elements.searchFilter.value.trim());
-  }
 
   const response = await apiFetch(`/api/dashboard-data?${params.toString()}`);
   const data = await response.json();
@@ -1687,10 +1728,8 @@ async function loadDashboard() {
 
   renderSummary(data.summary);
   renderNotices(data.notices);
-  renderCalendar(data.grid);
-  renderTable(data.schedules);
   updateMeta(data);
-  updateSelectionControls();
+  applyDashboardView();
   if (state.isAdmin && state.compactView) {
     updateCompactView();
   }
@@ -1835,8 +1874,7 @@ async function handleCalendarGridClick(event) {
     }
     persistConfirmationSelection();
 
-    renderCalendar(state.data.grid);
-    updateSelectionControls();
+    applyDashboardView();
     return;
   }
 
@@ -1981,11 +2019,8 @@ async function showSuccessMessageAndRefresh(data, payload, editing) {
   } catch (error) {
     console.error(error);
     applyScheduleUpdateLocally(payload, data, editing);
-    if (state.data?.grid) {
-      renderCalendar(state.data.grid);
-    }
-    if (state.data?.schedules) {
-      renderTable(state.data.schedules);
+    if (state.data?.grid && state.data?.schedules) {
+      applyDashboardView();
     }
   }
 }
@@ -2026,6 +2061,7 @@ function applyScheduleRemovalLocally(id, osId) {
   }
   
   updateSelectionControls();
+  applyDashboardView();
 }
 
 async function submitEditSchedule(event) {
@@ -2082,14 +2118,7 @@ async function submitCancelSchedule(event) {
     
     showToast(data.message || "Agendamento encerrado/cancelado com sucesso.");
     applyScheduleRemovalLocally(id, osId);
-    
-    if (state.data?.grid) {
-      renderCalendar(state.data.grid);
-    }
-    if (state.data?.schedules) {
-      renderTable(state.data.schedules);
-    }
-    
+
     elements.scheduleModal.close();
     resetScheduleForm();
   } catch (error) {
@@ -2273,8 +2302,7 @@ async function sendSelectedConfirmations(event) {
     }
     state.selectedScheduleIds.clear();
     persistConfirmationSelection();
-    renderCalendar(state.data.grid);
-    updateSelectionControls();
+    applyDashboardView();
 
     const skippedCount = Array.isArray(data.skipped) ? data.skipped.length : 0;
     const failedCount = Array.isArray(data.failed) ? data.failed.length : 0;
@@ -2551,9 +2579,9 @@ function wireEvents() {
   elements.refreshButton.addEventListener("click", refreshDashboard);
   elements.prevWeekButton.addEventListener("click", () => navigateWeek(-7));
   elements.nextWeekButton.addEventListener("click", () => navigateWeek(7));
-  elements.statusFilter.addEventListener("change", refreshDashboard);
+  elements.statusFilter.addEventListener("change", applyDashboardView);
   if (elements.routeFilter) {
-    elements.routeFilter.addEventListener("change", refreshDashboard);
+    elements.routeFilter.addEventListener("change", applyDashboardView);
   }
   if (elements.routeModeTechnician) {
     elements.routeModeTechnician.addEventListener("change", () => {
@@ -2561,14 +2589,14 @@ function wireEvents() {
         applySelectedRoutes([]);
         renderRouteFilter(getAvailableRouteFilterOptions(), []);
       }
-      refreshDashboard();
+      applyDashboardView();
     });
   }
   if (elements.routeModePop) {
     elements.routeModePop.addEventListener("change", () => {
       applySelectedRoutes([]);
       renderRouteFilter(getAvailableRouteFilterOptions(), []);
-      refreshDashboard();
+      applyDashboardView();
     });
   }
   if (elements.clearFiltersButton) {
@@ -2578,7 +2606,10 @@ function wireEvents() {
     applySevenDayWindowFromStartDate(elements.startDateFilter.value);
     refreshDashboard();
   });
-  elements.searchFilter.addEventListener("input", debounce(refreshDashboard, 250));
+  if (elements.endDateFilter) {
+    elements.endDateFilter.addEventListener("change", refreshDashboard);
+  }
+  elements.searchFilter.addEventListener("input", debounce(applyDashboardView, 150));
   elements.scheduleForm.addEventListener("submit", submitSchedule);
   const debouncedConflictUpdate = debounce(updateSlotConflictFromForm, 120);
   if (elements.scheduleForm?.elements?.rota) {
