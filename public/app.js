@@ -3,6 +3,7 @@ const state = {
   visibleSchedules: [],
   visibleGrid: null,
   schedulesById: new Map(),
+  confirmationLoadingIds: new Set(),
   selectedScheduleIds: new Set(),
   expandedCalendarCells: new Set(),
   sendingConfirmation: false,
@@ -1044,6 +1045,68 @@ function applyDashboardView() {
   renderCalendar(state.visibleGrid);
   renderTable(visibleSchedules);
   updateSelectionControls();
+  void refreshVisibleConfirmations();
+}
+
+function shouldHydrateConfirmation(item) {
+  if (!item || item.origem !== "sgp" || !String(item.osId || "").trim()) {
+    return false;
+  }
+  if (item.confirmationResolved) {
+    return false;
+  }
+  return !state.confirmationLoadingIds.has(String(item.osId || "").trim());
+}
+
+function applyConfirmationItems(items = []) {
+  let changed = false;
+  for (const entry of items) {
+    const osId = String(entry?.osId || "").trim();
+    if (!osId) {
+      continue;
+    }
+    for (const item of state.schedulesById.values()) {
+      if (String(item?.osId || "").trim() !== osId) {
+        continue;
+      }
+      item.confirmationUrl = entry.confirmationUrl || "";
+      item.confirmationStatus = entry.confirmationStatus || "sem_confirmacao";
+      item.confirmationTitle = entry.confirmationTitle || "";
+      item.confirmationSent = Boolean(entry.confirmationSent);
+      item.confirmationRequestedAt = entry.confirmationRequestedAt || "";
+      item.confirmationResolved = Boolean(entry.confirmationResolved);
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.data.schedules = Array.from(state.schedulesById.values());
+    applyDashboardView();
+  }
+}
+
+async function refreshVisibleConfirmations() {
+  const osIds = state.visibleSchedules
+    .filter(shouldHydrateConfirmation)
+    .map((item) => String(item.osId || "").trim());
+  if (!osIds.length) {
+    return;
+  }
+
+  osIds.forEach((osId) => state.confirmationLoadingIds.add(osId));
+  try {
+    const response = await apiFetch("/api/agendamentos/confirmation-status", {
+      method: "POST",
+      body: JSON.stringify({ osIds })
+    });
+    const data = await response.json();
+    osIds.forEach((osId) => state.confirmationLoadingIds.delete(osId));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || "Nao foi possivel carregar as confirmacoes.");
+    }
+    applyConfirmationItems(data.items || []);
+  } catch (error) {
+    osIds.forEach((osId) => state.confirmationLoadingIds.delete(osId));
+  }
 }
 
 function renderBlockPopSelect(routes = []) {
@@ -1713,6 +1776,7 @@ async function loadDashboard() {
     throw new Error(data.message || "Nao foi possivel atualizar o dashboard.");
   }
   state.data = data;
+  state.confirmationLoadingIds.clear();
   console.log("loadDashboard - data.isAdmin:", data.isAdmin, "data.isOperator:", data.isOperator);
   state.isAdmin = data.isAdmin || false;
   state.isOperator = data.isOperator || false;
@@ -1930,7 +1994,8 @@ function buildOptimisticScheduleItem(payload, originalItem) {
     createdBy: payload.createdBy || originalItem?.createdBy || "",
     confirmationStatus: originalItem?.confirmationStatus || "sem_confirmacao",
     confirmationUrl: originalItem?.confirmationUrl || "",
-    confirmationSent: originalItem?.confirmationSent || false
+    confirmationSent: originalItem?.confirmationSent || false,
+    confirmationResolved: Boolean(originalItem?.confirmationResolved)
   };
 }
 
@@ -2280,6 +2345,7 @@ async function sendSelectedConfirmations(event) {
       }
       current.confirmationStatus = "na_fila_envio";
       current.confirmationSent = false;
+      current.confirmationResolved = true;
     }
     const sentIds = new Set((data.sent || []).map((item) => String(item.id || "").trim()).filter(Boolean));
     for (const id of sentIds) {
@@ -2289,6 +2355,7 @@ async function sendSelectedConfirmations(event) {
       }
       current.confirmationStatus = "aguardando_confirmacao";
       current.confirmationSent = true;
+      current.confirmationResolved = true;
     }
     const failedIds = new Map((data.failed || []).map((item) => [String(item.id || "").trim(), item]).filter(([id]) => id));
     for (const [id, failed] of failedIds.entries()) {
@@ -2299,6 +2366,7 @@ async function sendSelectedConfirmations(event) {
       current.confirmationStatus = failed.state === "manual" ? "envio_manual" : "erro_envio";
       current.confirmationSent = false;
       current.confirmationTitle = failed.reason || "";
+      current.confirmationResolved = true;
     }
     state.selectedScheduleIds.clear();
     persistConfirmationSelection();

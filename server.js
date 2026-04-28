@@ -1581,7 +1581,8 @@ function applyConfirmationDispatchState(details, dispatchEntry) {
     confirmationStatus: details.confirmationStatus || "sem_confirmacao",
     confirmationTitle: details.confirmationTitle || "",
     confirmationSent: Boolean(details.confirmationSent),
-    confirmationRequestedAt: String(details.confirmationRequestedAt || "").trim()
+    confirmationRequestedAt: String(details.confirmationRequestedAt || "").trim(),
+    confirmationResolved: Boolean(details?.confirmationResolved)
   };
 
   if (next.confirmationStatus === "confirmado" || next.confirmationStatus === "rejeitado") {
@@ -1703,7 +1704,8 @@ async function fetchConfirmationDetailsForOs(config, osId, credentials = null) {
       confirmationUrl: "",
       confirmationStatus: "sem_confirmacao",
       confirmationTitle: "",
-      confirmationRequestedAt: ""
+      confirmationRequestedAt: "",
+      confirmationResolved: false
     };
   }
 
@@ -1718,7 +1720,8 @@ async function fetchConfirmationDetailsForOs(config, osId, credentials = null) {
       confirmationStatus: "sem_confirmacao",
       confirmationTitle: "",
       confirmationSent: false,
-      confirmationRequestedAt: ""
+      confirmationRequestedAt: "",
+      confirmationResolved: false
     }, readConfirmationDispatchEntry(normalizedOsId));
   }
 
@@ -1735,7 +1738,8 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
       confirmationUrl: "",
       confirmationStatus: "sem_confirmacao",
       confirmationTitle: "",
-      confirmationRequestedAt: ""
+      confirmationRequestedAt: "",
+      confirmationResolved: false
     };
   }
 
@@ -1746,7 +1750,8 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
       confirmationUrl: "",
       confirmationStatus: "sem_confirmacao",
       confirmationTitle: "",
-      confirmationRequestedAt: ""
+      confirmationRequestedAt: "",
+      confirmationResolved: true
     };
   }
 
@@ -1763,7 +1768,111 @@ async function fetchConfirmationDetailsForOsWithSession(config, session, osId) {
   }
 
   const dispatchEntry = readConfirmationDispatchEntry(normalizedOsId);
-  return extractConfirmationDetailsFromOccurrenceHtml(session.baseUrl, html, normalizedOsId, dispatchEntry);
+  return {
+    ...extractConfirmationDetailsFromOccurrenceHtml(session.baseUrl, html, normalizedOsId, dispatchEntry),
+    confirmationResolved: true
+  };
+}
+
+function applyCachedConfirmationToSchedules(schedules) {
+  for (const item of schedules || []) {
+    if (item?.origem !== "sgp" || !String(item.osId || "").trim()) {
+      item.confirmationResolved = true;
+      continue;
+    }
+    const cached = readConfirmationCache(item.osId);
+    if (!cached) {
+      item.confirmationResolved = false;
+      continue;
+    }
+    item.confirmationUrl = cached.confirmationUrl || "";
+    item.confirmationStatus = cached.confirmationStatus || "sem_confirmacao";
+    item.confirmationTitle = cached.confirmationTitle || "";
+    item.confirmationSent = Boolean(cached.confirmationSent);
+    item.confirmationRequestedAt = cached.confirmationRequestedAt || "";
+    item.confirmationResolved = true;
+  }
+}
+
+async function fetchConfirmationBatch(config, osIds = [], credentials = null) {
+  const normalizedIds = Array.from(
+    new Set((Array.isArray(osIds) ? osIds : []).map((value) => String(value || "").trim()).filter(Boolean))
+  );
+  const items = [];
+  if (!normalizedIds.length) {
+    return { ok: true, items };
+  }
+
+  const pending = [];
+  for (const osId of normalizedIds) {
+    const cached = readConfirmationCache(osId);
+    if (cached) {
+      items.push({
+        osId,
+        ...applyConfirmationDispatchState(cached, readConfirmationDispatchEntry(osId)),
+        confirmationResolved: true
+      });
+      continue;
+    }
+    pending.push(osId);
+  }
+
+  if (!pending.length) {
+    return { ok: true, items };
+  }
+
+  if (isSgpWebTemporarilyBlocked(config, credentials)) {
+    return { ok: true, items };
+  }
+
+  let session;
+  try {
+    session = await createSgpWebSession(config, credentials);
+  } catch (error) {
+    if (isSgpTwoFactorBlock(error)) {
+      markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""), credentials);
+      return { ok: true, items };
+    }
+    throw error;
+  }
+
+  const concurrency = Math.max(1, Math.min(3, Number(config.dashboard?.confirmation_fetch_concurrency || 1)));
+  let stop = false;
+  await runWithConcurrencyLimit(
+    pending,
+    concurrency,
+    async (osId) => {
+      if (stop) {
+        return;
+      }
+      try {
+        const details = await fetchConfirmationDetailsForOsWithSession(config, session, osId);
+        writeConfirmationCache(osId, details);
+        items.push({
+          osId,
+          ...details,
+          confirmationResolved: true
+        });
+      } catch (error) {
+        if (isSgpTwoFactorBlock(error)) {
+          stop = true;
+          markSgpWebTemporarilyBlocked(config, "2FA_required", String(error.detail || error.message || ""), credentials);
+          return;
+        }
+        const cached = readConfirmationCache(osId);
+        if (cached) {
+          items.push({
+            osId,
+            ...applyConfirmationDispatchState(cached, readConfirmationDispatchEntry(osId)),
+            confirmationResolved: true
+          });
+        }
+      }
+    },
+    () => stop
+  );
+
+  return { ok: true, items };
 }
 
 async function getOsDetails(config, osId, credentials = null) {
@@ -3483,6 +3592,7 @@ function normalizeSchedule(config, raw, source = "sgp") {
     confirmationTitle: String(raw.confirmationTitle || "").trim(),
     confirmationSent: Boolean(raw.confirmationSent),
     confirmationRequestedAt: String(raw.confirmationRequestedAt || "").trim(),
+    confirmationResolved: Boolean(raw.confirmationResolved),
     endereco: raw.endereco || raw.logradouro || "",
     motivo,
     sgpStatus,
@@ -3707,6 +3817,7 @@ function normalizeManualSchedule(entry) {
     confirmationTitle: entry.confirmationTitle || "",
     confirmationSent: Boolean(entry.confirmationSent),
     confirmationRequestedAt: entry.confirmationRequestedAt || "",
+    confirmationResolved: Boolean(entry.confirmationResolved),
     endereco: entry.endereco || "",
     motivo: String(entry.motivo || "").trim(),
     sgpStatus: "",
@@ -3971,6 +4082,7 @@ function serializeSchedule(item) {
     confirmationTitle: item.confirmationTitle || "",
     confirmationSent: Boolean(item.confirmationSent),
     confirmationRequestedAt: item.confirmationRequestedAt || "",
+    confirmationResolved: Boolean(item.confirmationResolved),
     endereco: item.endereco,
     motivo: item.motivo || "",
     sgpStatus: item.sgpStatus || "",
@@ -4079,7 +4191,7 @@ async function buildDashboardBaseData(config, { startDate, endDate, selectedDate
 	      .map((item) => normalizeSchedule(config, item, "sgp"));
 	    schedules = await enrichSchedulesWithSgpDetails(config, schedules, sgpAuth);
 	    schedules = schedules.filter((item) => item.data);
-	    schedules = await enrichSchedulesWithConfirmation(config, schedules, sgpAuth);
+      applyCachedConfirmationToSchedules(schedules);
 	    if (!schedules.length) {
       sourceMode = "mock";
       notices.push("Nenhum agendamento retornado pelo SGP para o periodo consultado. Exibindo dados de demonstracao.");
@@ -5430,6 +5542,38 @@ async function requestConfirmationDispatch(payload, authUser = null) {
   };
 }
 
+async function getBatchConfirmationStatus(payload, authUser = null) {
+  const osIds = Array.isArray(payload?.osIds) ? payload.osIds : [];
+  if (!osIds.length) {
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        items: []
+      }
+    };
+  }
+
+  const config = loadConfig();
+  const operatorAuth = authUser ? getSgpAuthFromUserPayload(authUser) : null;
+  if (!canUseSgpInteractionAuth(config, operatorAuth)) {
+    return {
+      statusCode: 401,
+      body: {
+        ok: false,
+        message: "Sessao do SGP expirada. Faca login novamente."
+      }
+    };
+  }
+
+  const result = await fetchConfirmationBatch(config, osIds, resolveSgpInteractionAuth(config, operatorAuth));
+  invalidateDashboardDataCache();
+  return {
+    statusCode: 200,
+    body: result
+  };
+}
+
 function sendJson(res, statusCode, body) {
   const payload = Buffer.from(JSON.stringify(body, null, 2));
   res.writeHead(statusCode, {
@@ -5770,6 +5914,13 @@ const server = http.createServer(async (req, res) => {
 
     if (normalizedPathname === "/api/agendamentos/send-confirmation") {
       console.log(`[CONFIRMATION_DISPATCH_API] ${req.method} ${parsedUrl.pathname}`);
+    }
+
+    if (req.method === "POST" && normalizedPathname === "/api/agendamentos/confirmation-status") {
+      const payload = await collectRequestBody(req);
+      const result = await getBatchConfirmationStatus(payload, req.authUser);
+      sendJson(res, result.statusCode, result.body);
+      return;
     }
 
     if (req.method === "POST" && normalizedPathname === "/api/agendamentos/send-confirmation") {
