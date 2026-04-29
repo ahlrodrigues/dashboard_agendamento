@@ -1046,6 +1046,99 @@ function summarizeSgpHtmlResponse(html) {
   return text.slice(0, 280);
 }
 
+function htmlToPlainText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractHtmlContextAroundField(html, fieldName, contextLength = 1400) {
+  const normalizedHtml = String(html || "");
+  const safeName = String(fieldName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = normalizedHtml.match(
+    new RegExp(`(<(?:input|select|textarea)[^>]*name=['"]${safeName}['"][\\s\\S]*?(?:<\\/select>|<\\/textarea>|>))`, "i")
+  );
+  if (!match || typeof match.index !== "number") {
+    return "";
+  }
+  const start = Math.max(0, match.index - Math.floor(contextLength / 2));
+  const end = Math.min(normalizedHtml.length, match.index + match[0].length + Math.floor(contextLength / 2));
+  return htmlToPlainText(normalizedHtml.slice(start, end)).slice(0, contextLength);
+}
+
+function extractHtmlAlertSnippets(html, limit = 3, snippetLength = 900) {
+  const normalizedHtml = String(html || "");
+  const patterns = [
+    /<[^>]*class=['"][^'"]*(?:alert|danger|warning|error|invalid|help-block|errorlist)[^'"]*['"][^>]*>[\s\S]*?<\/[^>]+>/gi,
+    /<ul[^>]*class=['"][^'"]*errorlist[^'"]*['"][^>]*>[\s\S]*?<\/ul>/gi
+  ];
+  const snippets = [];
+
+  for (const pattern of patterns) {
+    const matches = normalizedHtml.match(pattern) || [];
+    for (const match of matches) {
+      const text = htmlToPlainText(match).slice(0, snippetLength);
+      if (text && !snippets.includes(text)) {
+        snippets.push(text);
+      }
+      if (snippets.length >= limit) {
+        return snippets;
+      }
+    }
+  }
+
+  return snippets;
+}
+
+function extractSgpHtmlDiagnostics(html, { summaryLimit = 280, excerptLimit = 1600 } = {}) {
+  const normalizedHtml = String(html || "");
+  const text = htmlToPlainText(normalizedHtml);
+
+  const keywords = [
+    "alert",
+    "danger",
+    "error",
+    "erro",
+    "warning",
+    "aviso",
+    "invalid",
+    "invalido",
+    "inválido",
+    "required",
+    "obrigatorio",
+    "obrigatório",
+    "nao foi possivel",
+    "não foi possível",
+    "falha",
+    "sucesso"
+  ];
+  const lowerText = text.toLowerCase();
+  let excerpt = text.slice(0, excerptLimit);
+
+  for (const keyword of keywords) {
+    const index = lowerText.indexOf(keyword);
+    if (index >= 0) {
+      const start = Math.max(0, index - 220);
+      const end = Math.min(text.length, index + excerptLimit);
+      excerpt = text.slice(start, end);
+      break;
+    }
+  }
+
+  return {
+    summary: text.slice(0, summaryLimit),
+    excerpt,
+    alertSnippets: extractHtmlAlertSnippets(normalizedHtml),
+    responsibleFieldContext: extractHtmlContextAroundField(normalizedHtml, "responsavel"),
+    responsibleSelectedValue: extractHtmlFieldValue(normalizedHtml, "responsavel"),
+    responsibleSelectedLabel: extractHtmlSelectSelectedLabel(normalizedHtml, "responsavel")
+  };
+}
+
 function normalizePhoneDigits(value) {
   return String(value || "").replace(/\D+/g, "");
 }
@@ -1877,12 +1970,13 @@ async function fetchConfirmationBatch(config, osIds = [], credentials = null) {
 
 async function getOsDetails(config, osId, credentials = null) {
   console.log("[getOsDetails] Iniciando para OS:", osId);
-  
+  let apiDetails = null;
+
   // Preferir API (quando configurada) para reduzir hits na web/2FA.
   if (hasAppTokenAuth(config)) {
     try {
-      const apiDetails = await getOsDetailsViaApi(config, osId, credentials);
-      if (apiDetails) {
+      apiDetails = await getOsDetailsViaApi(config, osId, credentials);
+      if (apiDetails && Array.isArray(apiDetails.classification_options) && apiDetails.classification_options.length) {
         return apiDetails;
       }
     } catch (apiError) {
@@ -1917,6 +2011,15 @@ async function getOsDetails(config, osId, credentials = null) {
     const responsavelLabel = extractHtmlSelectSelectedLabel(html, "responsavel") || responsavel;
     const dataAgendamento = extractHtmlFieldValue(html, "data_agendamento") || "";
     const statusLabel = extractHtmlSelectSelectedLabel(html, "status");
+    const classificationValue = extractHtmlFieldValue(html, "tipo_classificacoes") || "";
+    const classificationLabel = extractHtmlSelectSelectedLabel(html, "tipo_classificacoes") || classificationValue;
+    const classificationOptions = extractHtmlSelectOptions(html, "tipo_classificacoes")
+      .filter((item) => String(item?.value || "").trim())
+      .map((item) => ({
+        value: String(item.value || "").trim(),
+        label: String(item.label || "").trim(),
+        selected: Boolean(item.selected)
+      }));
     const parsedSchedule = extractSgpScheduledDateTime({
       data_agendamento: dataAgendamento
     });
@@ -1924,6 +2027,7 @@ async function getOsDetails(config, osId, credentials = null) {
     console.log("[getOsDetails] Campos extraidos - anotacao:", JSON.stringify(anotacao.substring(0, 100)));
     
     return {
+      ...(apiDetails && typeof apiDetails === "object" ? apiDetails : {}),
       ok: true,
       anotacao,
       observacao,
@@ -1933,10 +2037,17 @@ async function getOsDetails(config, osId, credentials = null) {
       data_agendamento: dataAgendamento,
       data_agendamento_date: parsedSchedule.date,
       hora_agendamento: parsedSchedule.time,
-      status_label: statusLabel
+      status_label: statusLabel,
+      classification_type: classificationValue,
+      classification_label: classificationLabel,
+      classification_options: classificationOptions,
+      classification_required: classificationOptions.length > 0 && !classificationValue
     };
   } catch (error) {
     console.error("[getOsDetails] Erro:", error.message, error.detail || "");
+    if (apiDetails) {
+      return apiDetails;
+    }
     throw error;
   }
 }
@@ -1965,7 +2076,11 @@ async function getOsDetailsViaApi(config, osId, credentials = null) {
     data_agendamento: String(row.data_agendamento || row.os_data_agendamento || row.data_hora_agendamento || ""),
     data_agendamento_date: extractSgpScheduledDateTime(row).date,
     hora_agendamento: extractSgpScheduledDateTime(row).time,
-    status_label: String(row.status_descricao || row.status_nome || row.status_label || "")
+    status_label: String(row.status_descricao || row.status_nome || row.status_label || ""),
+    classification_type: "",
+    classification_label: "",
+    classification_options: [],
+    classification_required: false
   };
 }
 
@@ -2014,12 +2129,18 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
   const existingObservacao = existingObservacaoFromHtml ||
     await fetchExistingSgpObservation(config, osId, credentials);
   const mergedObservacao = mergeSgpObservation(existingObservacao, incomingObservacao);
+  const classificationValue = String(
+    entry?.tipoClassificacoes ||
+    extractHtmlFieldValue(html, "tipo_classificacoes") ||
+    ""
+  ).trim();
   const payload = {
     csrfmiddlewaretoken: extractHtmlFieldValue(html, "csrfmiddlewaretoken"),
     dpb_token: extractHtmlFieldValue(html, "dpb_token"),
     setor: extractHtmlFieldValue(html, "setor") || "1",
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
+    tipo_classificacoes: classificationValue,
     prioridade: forcedPriority != null ? String(forcedPriority) : (extractHtmlFieldValue(html, "prioridade") || "2"),
     data_agendamento: hasDefinedScheduleTime
       ? toBrazilDateTime(entry.data, entry.horario)
@@ -2143,7 +2264,9 @@ const checkSessionExpired = (response, htmlText) => {
     break;
   }
 
-  const responseSummary = summarizeSgpHtmlResponse(responseText);
+  const responseDiagnostics = extractSgpHtmlDiagnostics(responseText);
+  const responseSummary = responseDiagnostics.summary;
+  const shouldLogExtendedHtml = response.status === 200 && !(response.headers.get("location") || "").trim();
 
   console.log("[CONFIRMATION_DISPATCH_DEBUG] response", JSON.stringify({
     osId: String(osId || "").trim(),
@@ -2151,7 +2274,14 @@ const checkSessionExpired = (response, htmlText) => {
     location: response.headers.get("location") || "",
     finalUrl: response.url || "",
     bodyLength: responseText.length,
-    bodySummary: responseSummary
+    bodySummary: responseSummary,
+    ...(shouldLogExtendedHtml ? {
+      bodyExcerpt: responseDiagnostics.excerpt,
+      htmlAlerts: responseDiagnostics.alertSnippets,
+      responsavelSelectedValue: responseDiagnostics.responsibleSelectedValue,
+      responsavelSelectedLabel: responseDiagnostics.responsibleSelectedLabel,
+      responsavelFieldContext: responseDiagnostics.responsibleFieldContext
+    } : {})
   }));
 
   if (confirmationDispatchRequested && response.status >= 200 && response.status < 400) {
@@ -2189,6 +2319,9 @@ const checkSessionExpired = (response, htmlText) => {
     payload,
     status: response.status,
     location: response.headers.get("location") || "",
+    htmlAlerts: shouldLogExtendedHtml ? responseDiagnostics.alertSnippets : [],
+    responsavelSelectedValue: shouldLogExtendedHtml ? responseDiagnostics.responsibleSelectedValue : "",
+    responsavelSelectedLabel: shouldLogExtendedHtml ? responseDiagnostics.responsibleSelectedLabel : "",
     confirmationDispatchRequested,
     dispatchBlockedReason,
     credentialUser: String(session.username || "").trim() || "",
@@ -2760,6 +2893,28 @@ function getSgpMutationError(data) {
 
   if (!data || typeof data !== "object") {
     return "";
+  }
+
+  if (Array.isArray(data.htmlAlerts) && data.htmlAlerts.length) {
+    const normalizedAlerts = data.htmlAlerts
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    if (normalizedAlerts.length) {
+      const mergedAlerts = [];
+      for (const alert of normalizedAlerts) {
+        if (!mergedAlerts.length) {
+          mergedAlerts.push(alert);
+          continue;
+        }
+        const previous = mergedAlerts[mergedAlerts.length - 1];
+        if (previous.endsWith(":")) {
+          mergedAlerts[mergedAlerts.length - 1] = `${previous} ${alert}`.trim();
+        } else if (!mergedAlerts.includes(alert)) {
+          mergedAlerts.push(alert);
+        }
+      }
+      return mergedAlerts.join(" ");
+    }
   }
 
   if (data.ok === false) {
@@ -4972,7 +5127,8 @@ async function updateSchedule(payload, authUser = null) {
     horario: normalizeScheduleTimeInput(payload.horario),
     endereco: String(payload.endereco || "").trim(),
     justificativa: String(payload.justificativa || payload.observacao || "").trim(),
-    createdBy: payloadCreatedBy
+    createdBy: payloadCreatedBy,
+    tipoClassificacoes: String(payload.tipo_classificacoes || "").trim()
   };
 
   if (!id) {

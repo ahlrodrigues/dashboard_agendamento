@@ -150,14 +150,22 @@
             <input name="rota" type="text" />
           </label>
 
-          <label class="field">
-            <span>Tecnico</span>
-            <select name="tecnico">
-              <option value="">Selecione um tecnico</option>
-            </select>
-          </label>
+	          <label class="field">
+	            <span>Tecnico</span>
+	            <select name="tecnico">
+	              <option value="">Selecione um tecnico</option>
+	            </select>
+	          </label>
 
-	          <div class="field-row">
+	          <label class="field">
+	            <span>Tipo de Classificacao</span>
+	            <select name="tipo_classificacoes" disabled>
+	              <option value="">Selecione uma classificacao</option>
+	            </select>
+	            <small class="field-hint" data-classification-hint>Carregado automaticamente do SGP para a OS selecionada.</small>
+	          </label>
+
+		          <div class="field-row">
 	            <label class="field">
 	              <span>Data</span>
 	              <input name="data" type="date" required />

@@ -1641,11 +1641,56 @@ function fillScheduleFormFromSchedule(item) {
   setFormTurno(elements.scheduleForm, inferTurnoFromTime(item.horario));
   form.endereco.value = item.endereco || "";
   form.observacao.value = "";
+  renderClassificationOptions(item.classificationOptions || [], item.classificationType || "");
   elements.scheduleForm.dataset.loadedContract = item.contrato || "";
   setContractLookupStatus("Agendamento carregado para edicao.", "success");
   setScheduleFormMode("edit");
   elements.scheduleForm.scrollIntoView({ behavior: "smooth", block: "start" });
   updateSlotConflictFromForm();
+}
+
+function renderClassificationOptions(options = [], selectedValue = "", { required = false } = {}) {
+  const select = elements.scheduleForm?.elements?.tipo_classificacoes;
+  const hint = elements.scheduleForm?.querySelector?.("[data-classification-hint]");
+  if (!select) {
+    return;
+  }
+
+  const normalizedOptions = Array.isArray(options)
+    ? options
+      .map((item) => ({
+        value: String(item?.value || "").trim(),
+        label: String(item?.label || "").trim(),
+        selected: Boolean(item?.selected)
+      }))
+      .filter((item) => item.value)
+    : [];
+  const fallbackSelected = normalizedOptions.find((item) => item.selected)?.value || "";
+  const finalSelectedValue = String(selectedValue || fallbackSelected || "").trim();
+
+  if (!normalizedOptions.length) {
+    select.innerHTML = '<option value="">Sem classificacao disponivel</option>';
+    select.value = "";
+    select.disabled = true;
+    select.required = false;
+    if (hint) {
+      hint.textContent = "A OS nao trouxe classificacoes do SGP.";
+    }
+    return;
+  }
+
+  select.innerHTML = [
+    '<option value="">Selecione uma classificacao</option>',
+    ...normalizedOptions.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+  ].join("");
+  select.disabled = false;
+  select.required = Boolean(required || !finalSelectedValue);
+  select.value = finalSelectedValue;
+  if (hint) {
+    hint.textContent = select.required
+      ? "Selecione a classificacao exigida pelo SGP para esta OS."
+      : "Classificacao carregada do SGP para a OS selecionada.";
+  }
 }
 
 async function hydrateScheduleFromSgp(item) {
@@ -1665,7 +1710,11 @@ async function hydrateScheduleFromSgp(item) {
     tecnico: String(data.responsavel_label || data.responsavel || item.tecnico || "").trim() || item.tecnico || "",
     data: String(data.data_agendamento_date || item.data || "").trim() || item.data || "",
     horario: hhmm(data.hora_agendamento || item.horario || "") || item.horario || "",
-    observacao: String(data.observacao || item.observacao || "").trim() || item.observacao || ""
+    observacao: String(data.observacao || item.observacao || "").trim() || item.observacao || "",
+    classificationType: String(data.classification_type || item.classificationType || "").trim(),
+    classificationLabel: String(data.classification_label || item.classificationLabel || "").trim(),
+    classificationRequired: Boolean(data.classification_required),
+    classificationOptions: Array.isArray(data.classification_options) ? data.classification_options : []
   };
 
   state.schedulesById.set(String(item.id || "").trim(), hydrated);
@@ -1680,6 +1729,7 @@ function resetScheduleForm() {
   elements.scheduleForm.elements.origem.value = "";
   elements.scheduleForm.elements.data.value = elements.startDateFilter.value || today;
   renderScheduleTechnicianOptions("");
+  renderClassificationOptions([], "");
   setFormTurno(elements.scheduleForm, "");
   resetContractLookupState();
   setScheduleFormMode("create");
@@ -2572,6 +2622,22 @@ function fillScheduleFormFromContract(contract, openOses = []) {
               ? os.hora_agendamento
               : os.hora_abertura || "";
           setFormTurno(elements.scheduleForm, inferTurnoFromTime(referenceTime));
+        }
+
+        try {
+          const detailsResponse = await apiFetch(`/api/os/${encodeURIComponent(os.osId)}`);
+          const details = await detailsResponse.json();
+          if (detailsResponse.ok && details?.ok) {
+            renderClassificationOptions(
+              Array.isArray(details.classification_options) ? details.classification_options : [],
+              String(details.classification_type || "").trim(),
+              { required: Boolean(details.classification_required) }
+            );
+          } else {
+            renderClassificationOptions([], "");
+          }
+        } catch (error) {
+          renderClassificationOptions([], "");
         }
 
         // Destaca o card selecionado
