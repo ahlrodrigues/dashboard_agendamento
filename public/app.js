@@ -1652,6 +1652,7 @@ function fillScheduleFormFromSchedule(item) {
 function renderClassificationOptions(options = [], selectedValue = "", { required = false } = {}) {
   const select = elements.scheduleForm?.elements?.tipo_classificacoes;
   const hint = elements.scheduleForm?.querySelector?.("[data-classification-hint]");
+  const field = elements.scheduleForm?.querySelector?.("[data-classification-field]");
   if (!select) {
     return;
   }
@@ -1673,6 +1674,9 @@ function renderClassificationOptions(options = [], selectedValue = "", { require
     select.value = "";
     select.disabled = true;
     select.required = false;
+    if (field) {
+      field.hidden = true;
+    }
     if (hint) {
       hint.textContent = "A OS nao trouxe classificacoes do SGP.";
     }
@@ -1686,6 +1690,9 @@ function renderClassificationOptions(options = [], selectedValue = "", { require
   select.disabled = false;
   select.required = Boolean(required || !finalSelectedValue);
   select.value = finalSelectedValue;
+  if (field) {
+    field.hidden = !select.required;
+  }
   if (hint) {
     hint.textContent = select.required
       ? "Selecione a classificacao exigida pelo SGP para esta OS."
