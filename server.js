@@ -322,8 +322,26 @@ function writeBlockedSlots(items) {
   invalidateDashboardDataCache();
 }
 
+function stripTrailingUfSuffix(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const match = text.match(/^(.*?)(?:\s*[-/]\s*|\s+)(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i);
+  if (!match) {
+    return text;
+  }
+
+  return String(match[1] || "").trim() || text;
+}
+
+function canonicalizePopName(value) {
+  return stripTrailingUfSuffix(value);
+}
+
 function normalizeBlockedSlot(entry) {
-  const rota = String(entry.rota || "").trim() || "Sem POP";
+  const rota = canonicalizePopName(entry.rota) || "Sem POP";
   const data = isoDateOnly(entry.data);
   const start = hhmm(entry.horario_inicio || entry.horario);
   const end = hhmm(entry.horario_fim || entry.horario);
@@ -365,7 +383,7 @@ function saveBlockedSlot(entry) {
   const items = readBlockedSlots();
   const saved = {
     id: String(entry.id || "").trim() || `block-${Date.now()}`,
-    rota: String(entry.rota || "").trim(),
+    rota: canonicalizePopName(entry.rota),
     data: isoDateOnly(entry.data),
     horario_inicio: hhmm(entry.horario_inicio || entry.horario),
     horario_fim: hhmm(entry.horario_fim || entry.horario),
@@ -2973,26 +2991,26 @@ async function listServiceOrders(config, { startDate, endDate }, operatorAuth = 
 }
 
 function normalizePopName(raw) {
+  let value = "";
   if (typeof raw === "string" || typeof raw === "number") {
-    return String(raw || "").trim();
+    value = String(raw || "").trim();
+  } else if (raw && typeof raw === "object") {
+    value = String(
+      raw.nome ||
+        raw.name ||
+        raw.descricao ||
+        raw.description ||
+        raw.pop ||
+        raw.nome_pop ||
+        raw.pop_nome ||
+        raw.contrato_pop_nome ||
+        raw.fantasia ||
+        raw.razao ||
+        raw.label ||
+        ""
+    ).trim();
   }
-  if (!raw || typeof raw !== "object") {
-    return "";
-  }
-  return String(
-    raw.nome ||
-      raw.name ||
-      raw.descricao ||
-      raw.description ||
-      raw.pop ||
-      raw.nome_pop ||
-      raw.pop_nome ||
-      raw.contrato_pop_nome ||
-      raw.fantasia ||
-      raw.razao ||
-      raw.label ||
-      ""
-  ).trim();
+  return canonicalizePopName(value);
 }
 
 function parseBooleanish(value) {
@@ -3589,7 +3607,7 @@ function pickProtocol(raw) {
 }
 
 function normalizeRoute(raw) {
-  return (
+  return canonicalizePopName(
     raw.rota ||
     raw.nome_rota ||
     raw.cidade ||
@@ -3679,7 +3697,7 @@ function normalizeContractLookup(config, raw) {
     contrato: String(raw.contrato_id || raw.contrato || "").trim(),
     cliente: String(raw.cliente_nome || raw.cliente || raw.razaosocial || "").trim(),
     telefone: String(raw.cliente_contato || raw.telefone || raw.celular || raw.fone || "").trim(),
-    rota: String(raw.contrato_pop_nome || raw.contrato_pop || raw.pop || "").trim(),
+    rota: canonicalizePopName(raw.contrato_pop_nome || raw.contrato_pop || raw.pop || ""),
     endereco: buildAddressText(raw),
     clienteId: clientId,
     clienteUrl: buildClientUrl(config, { cliente_id: clientId })
@@ -3960,7 +3978,7 @@ function normalizeManualSchedule(entry) {
     cliente: entry.cliente || "Cliente nao identificado",
     contrato: entry.contrato || "",
     telefone: entry.telefone || "",
-    rota: entry.rota || "Call Center",
+    rota: canonicalizePopName(entry.rota) || "Call Center",
     tecnico: entry.tecnico || "A definir",
     data: isoDateOnly(entry.data),
     horario: normalizeSlot(entry.horario),
@@ -4633,8 +4651,7 @@ async function closeSgpSchedule(config, osId, operatorAuth = null) {
 }
 
 function normalizePopKey(value) {
-  return String(value || "")
-    .trim()
+  return canonicalizePopName(value)
     .toLowerCase()
     .replace(/\s+/g, " ");
 }
@@ -4695,7 +4712,7 @@ async function createBlockedSlot(payload, authUser = null) {
     };
   }
   const entry = {
-    rota: String(payload.rota || payload.pop || "").trim(),
+    rota: canonicalizePopName(payload.rota || payload.pop || ""),
     data: isoDateOnly(payload.data),
     horario_inicio: hhmm(payload.horario_inicio || payload.horarioInicial || payload.horario || ""),
     horario_fim: hhmm(payload.horario_fim || payload.horarioFinal || payload.horario || ""),
