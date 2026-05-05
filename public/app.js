@@ -670,6 +670,17 @@ function normalizeTechnicianKey(value) {
     .replace(/\s+/g, " ");
 }
 
+function isPlaceholderTechnicianValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  if (/^-+$/.test(normalized)) {
+    return true;
+  }
+  return new Set(["nao definido", "não definido", "a definir", "-"]).has(normalized);
+}
+
 function updateScheduleSubmitButtonState() {
   const button = elements.scheduleSubmitButton || elements.scheduleForm?.querySelector("button[type=submit]");
   if (!button) {
@@ -1535,9 +1546,7 @@ function getDisplayTechnicianName(value) {
   if (!normalized) {
     return "";
   }
-
-  const placeholderValues = new Set(["nao definido", "não definido", "a definir", "-"]);
-  if (placeholderValues.has(normalized.toLowerCase())) {
+  if (isPlaceholderTechnicianValue(normalized)) {
     return "";
   }
 

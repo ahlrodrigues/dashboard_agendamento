@@ -3642,6 +3642,9 @@ function hasMeaningfulTechnician(value) {
   if (!normalized) {
     return false;
   }
+  if (/^-+$/.test(normalized)) {
+    return false;
+  }
   return !new Set(["nao definido", "não definido", "a definir", "-"]).has(normalized);
 }
 
