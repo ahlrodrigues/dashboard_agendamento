@@ -959,6 +959,10 @@ function getCurrentDashboardFilters() {
 }
 
 function matchesDashboardFilters(item, filters = getCurrentDashboardFilters()) {
+  if (isBlockedScheduleItem(item)) {
+    return true;
+  }
+
   const confirmationStatus = String(item.confirmationStatus || "").trim();
 
   if (filters.status && filters.status !== "todos") {
@@ -1196,7 +1200,7 @@ function renderChip(item) {
 	  const reason = String(item.observacao || "").trim();
 	  const title = reason ? ` title="${escapeHtml(reason)}"` : "";
 	  const unblockButton = state.isAdmin
-	    ? `<button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>`
+	    ? `<button class="chip-unblock-button" type="button" data-block-id="${escapeHtml(item.blockId || item.id)}" aria-label="Desbloquear horario" title="Desbloquear horario">×</button>`
 	    : "";
 	  return `
 	    <div class="chip bloqueado"${title} tabindex="-1">

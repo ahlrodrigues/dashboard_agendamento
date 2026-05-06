@@ -52,7 +52,7 @@ Exemplo:
     "janela_dias_passado": 7,
     "janela_dias_futuro": 14,
     "timeout_sgp_ms": 12000,
-    "horarios_padrao": ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"]
+    "horarios_padrao": ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"]
   },
   "agendamento": {
     "endpoint_lista": "/api/ura/ordemservico/list/",

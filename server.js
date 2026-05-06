@@ -146,7 +146,7 @@ function ensureDashboardCreatedByAudit(text, createdBy, date = new Date()) {
 }
 
 const DEFAULT_STATUSES = [0, 3];
-const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
+const DEFAULT_SLOTS = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"];
 const DEFAULT_TIMEOUT_MS = 12000;
 const DEFAULT_SEND_INTERVAL_MS = 30000;
 const DEFAULT_LOGIN_TTL_MS = 2 * 60 * 60 * 1000;
@@ -341,6 +341,7 @@ function canonicalizePopName(value) {
 }
 
 function normalizeBlockedSlot(entry) {
+  const baseId = entry.id || `block-${cryptoRandomId()}`;
   const rota = canonicalizePopName(entry.rota) || "Sem POP";
   const data = isoDateOnly(entry.data);
   const start = hhmm(entry.horario_inicio || entry.horario);
@@ -354,7 +355,8 @@ function normalizeBlockedSlot(entry) {
     : motivo;
 
   return {
-    id: entry.id || `block-${cryptoRandomId()}`,
+    id: slotTime ? `${baseId}__${slotTime.replace(":", "")}` : baseId,
+    blockId: baseId,
     osId: "",
     protocolo: "",
     cliente: "Horario bloqueado",
@@ -4241,6 +4243,7 @@ function filterSchedules(schedules, { search, status, pops = [] }) {
 function serializeSchedule(item) {
   return {
     id: item.id,
+    blockId: item.blockId || "",
     osId: item.osId || "",
     protocolo: item.protocolo,
     cliente: item.cliente,
