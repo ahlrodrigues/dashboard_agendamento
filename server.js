@@ -979,6 +979,20 @@ function htmlFieldChecked(html, name) {
   return Boolean(input && /checked/i.test(input[0]));
 }
 
+function extractHtmlAttributesMap(attributes) {
+  const map = {};
+  const source = String(attributes || "");
+  for (const match of source.matchAll(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+    const name = String(match[1] || "").trim().toLowerCase();
+    if (!name) {
+      continue;
+    }
+    const rawValue = match[2] ?? match[3] ?? match[4];
+    map[name] = rawValue == null ? true : decodeHtmlEntities(rawValue);
+  }
+  return map;
+}
+
 function extractHtmlSelectOptions(html, name) {
   const safeName = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const select = html.match(new RegExp(`<select[^>]*name=['"]${safeName}['"][^>]*>([\\s\\S]*?)<\\/select>`, "i"));
@@ -986,11 +1000,17 @@ function extractHtmlSelectOptions(html, name) {
     return [];
   }
 
-  return [...select[1].matchAll(/<option([^>]*)value=['"]([^'"]*)['"]([^>]*)>([\s\S]*?)<\/option>/gi)].map((match) => ({
-    value: String(match[2] || "").trim(),
-    label: String(match[4] || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").trim(),
-    selected: /selected/i.test(`${match[1]} ${match[3]}`)
-  }));
+  return [...select[1].matchAll(/<option([^>]*)value=['"]([^'"]*)['"]([^>]*)>([\s\S]*?)<\/option>/gi)].map((match) => {
+    const attributesText = `${match[1] || ""} ${match[3] || ""}`;
+    const attributes = extractHtmlAttributesMap(attributesText);
+    return {
+      value: String(match[2] || "").trim(),
+      label: decodeHtmlEntities(String(match[4] || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")).trim(),
+      selected: /selected/i.test(attributesText),
+      disabled: Object.prototype.hasOwnProperty.call(attributes, "disabled"),
+      attributes
+    };
+  });
 }
 
 function extractHtmlSelectSelectedLabel(html, name) {
@@ -1671,6 +1691,49 @@ async function fetchSgpOsEditForm(config, session, osId) {
   throw error;
 }
 
+function normalizeSgpClassificationDetailRows(rows, selectedValue = "") {
+  const selected = String(selectedValue || "").trim();
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows
+    .map((item) => ({
+      value: String(item?.id ?? item?.value ?? item?.pk ?? "").trim(),
+      label: String(item?.descricao ?? item?.label ?? item?.nome ?? item?.name ?? "").trim()
+    }))
+    .filter((item) => item.value && item.label)
+    .map((item) => ({
+      ...item,
+      selected: item.value === selected
+    }));
+}
+
+async function fetchSgpActiveClassificationOptionsForReason(config, session, reasonId, selectedValue = "") {
+  const normalizedReasonId = String(reasonId || "").trim();
+  if (!normalizedReasonId) {
+    return [];
+  }
+
+  const baseUrl = String(session.baseUrl || "").replace(/\/+$/, "");
+  const url = `${baseUrl}/admin/atendimento/ordemservico/motivoos/detail/?id=${encodeURIComponent(normalizedReasonId)}`;
+  const response = await fetch(url, {
+    headers: {
+      Cookie: session.cookies,
+      "X-Requested-With": "XMLHttpRequest"
+    },
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  if (!response.ok) {
+    throw new Error(`Falha ao consultar classificacoes ativas do SGP (${response.status}).`);
+  }
+
+  const text = await response.text();
+  const data = JSON.parse(text);
+  const rows = Array.isArray(data) ? data[1] : [];
+  return normalizeSgpClassificationDetailRows(rows, selectedValue);
+}
+
 function extractOccurrenceEditPathFromOsHtml(html) {
   const match = String(html || "").match(/\/admin\/atendimento\/ocorrencia\/\d+\/edit\//i);
   return match ? match[0] : "";
@@ -2033,13 +2096,29 @@ async function getOsDetails(config, osId, credentials = null) {
     const statusLabel = extractHtmlSelectSelectedLabel(html, "status");
     const classificationValue = extractHtmlFieldValue(html, "tipo_classificacoes") || "";
     const classificationLabel = extractHtmlSelectSelectedLabel(html, "tipo_classificacoes") || classificationValue;
-    const classificationOptions = extractHtmlSelectOptions(html, "tipo_classificacoes")
+    const reasonValue = extractHtmlFieldValue(html, "motivoos") || "";
+    const fallbackClassificationOptions = extractHtmlSelectOptions(html, "tipo_classificacoes")
       .filter((item) => String(item?.value || "").trim())
+      .filter(isSgpClassificationActive)
       .map((item) => ({
         value: String(item.value || "").trim(),
         label: String(item.label || "").trim(),
         selected: Boolean(item.selected)
       }));
+    let classificationOptions = fallbackClassificationOptions;
+    try {
+      const activeOptions = await fetchSgpActiveClassificationOptionsForReason(config, session, reasonValue, classificationValue);
+      classificationOptions = activeOptions;
+    } catch (classificationError) {
+      console.warn("[getOsDetails] Falha ao consultar classificacoes ativas do SGP:", classificationError.message);
+      if (reasonValue) {
+        classificationOptions = [];
+      }
+    }
+    const activeClassificationValue = classificationOptions.some((item) => item.value === classificationValue)
+      ? classificationValue
+      : "";
+    const activeClassificationLabel = activeClassificationValue ? classificationLabel : "";
     const parsedSchedule = extractSgpScheduledDateTime({
       data_agendamento: dataAgendamento
     });
@@ -2058,10 +2137,10 @@ async function getOsDetails(config, osId, credentials = null) {
       data_agendamento_date: parsedSchedule.date,
       hora_agendamento: parsedSchedule.time,
       status_label: statusLabel,
-      classification_type: classificationValue,
-      classification_label: classificationLabel,
+      classification_type: activeClassificationValue,
+      classification_label: activeClassificationLabel,
       classification_options: classificationOptions,
-      classification_required: classificationOptions.length > 0 && !classificationValue
+      classification_required: classificationOptions.length > 0 && !activeClassificationValue
     };
   } catch (error) {
     console.error("[getOsDetails] Erro:", error.message, error.detail || "");
@@ -3054,6 +3133,64 @@ function isPopActive(raw) {
   const statusValue = parseBooleanish(raw.status_pop ?? raw.pop_status ?? raw.status_nome ?? raw.status_label ?? raw.situacao_nome ?? raw.situacao);
   if (statusValue !== null) {
     return statusValue;
+  }
+
+  return true;
+}
+
+function isSgpClassificationActive(option) {
+  if (!option || typeof option !== "object") {
+    return true;
+  }
+
+  if (option.disabled) {
+    return false;
+  }
+
+  const attributes = option.attributes && typeof option.attributes === "object"
+    ? option.attributes
+    : {};
+  const inactiveValue = parseBooleanish(
+    attributes.inativo ??
+      attributes.inactive ??
+      attributes.desativado ??
+      attributes.disabled ??
+      attributes["data-inativo"] ??
+      attributes["data-inactive"] ??
+      attributes["data-desativado"] ??
+      attributes["data-disabled"]
+  );
+  if (inactiveValue === true) {
+    return false;
+  }
+
+  const activeValue = parseBooleanish(
+    attributes.ativo ??
+      attributes.active ??
+      attributes.habilitado ??
+      attributes.enabled ??
+      attributes["data-ativo"] ??
+      attributes["data-active"] ??
+      attributes["data-habilitado"] ??
+      attributes["data-enabled"]
+  );
+  if (activeValue !== null) {
+    return activeValue;
+  }
+
+  const statusValue = parseBooleanish(
+    attributes.status ??
+      attributes.situacao ??
+      attributes["data-status"] ??
+      attributes["data-situacao"]
+  );
+  if (statusValue !== null) {
+    return statusValue;
+  }
+
+  const label = normalizeComparableText(option.label);
+  if (/(^|[\s([{-])inativ[oa]($|[\s)\]}-])/.test(label) || /(^|[\s([{-])desativad[oa]($|[\s)\]}-])/.test(label)) {
+    return false;
   }
 
   return true;
