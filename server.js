@@ -3756,27 +3756,7 @@ function normalizeRoute(raw) {
   );
 }
 
-function isConnectorRemovalServiceOrder(raw) {
-  const motivo = normalizeComparableText(normalizeMotivo(raw));
-  if (!motivo) {
-    return false;
-  }
-  return (
-    /(^|\s)remocao(\s+de)?\s+conector(es)?(\s|$)/.test(motivo) ||
-    /(^|\s)retirada(\s+de)?\s+conector(es)?(\s|$)/.test(motivo)
-  );
-}
-
 function normalizeTechnician(raw) {
-  if (isConnectorRemovalServiceOrder(raw)) {
-    return (
-      raw.tecnico_nome ||
-      raw.tecnico ||
-      raw.responsavel ||
-      "Nao definido"
-    );
-  }
-
   return (
     raw.tecnico_nome ||
     raw.tecnico ||
