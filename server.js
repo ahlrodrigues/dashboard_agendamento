@@ -2305,7 +2305,6 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
     setor: extractHtmlFieldValue(html, "setor") || "1",
     tipoos: extractHtmlFieldValue(html, "tipoos") || "1",
     motivoos: extractHtmlFieldValue(html, "motivoos") || "58",
-    tipo_classificacoes: classificationValue,
     prioridade: forcedPriority != null ? String(forcedPriority) : (extractHtmlFieldValue(html, "prioridade") || "2"),
     data_agendamento: hasDefinedScheduleTime
       ? toBrazilDateTime(entry.data, entry.horario)
@@ -2329,6 +2328,9 @@ async function updateScheduleViaSgpWebForm(config, osId, entry, credentials = nu
       ? { gateway_sms: gatewayValue || extractHtmlFieldValue(html, "gateway_sms") }
       : {})
   };
+  if (classificationValue) {
+    payload.tipo_classificacoes = classificationValue;
+  }
   if (htmlFieldChecked(html, "sms_tecnico")) {
     payload.sms_tecnico = "on";
   }
