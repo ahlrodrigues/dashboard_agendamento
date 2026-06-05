@@ -695,6 +695,47 @@ body.dark .hero {
   background: linear-gradient(135deg, #c53b37, #ef6b66);
 }
 
+.route-summary-panel {
+  padding: 16px 18px 12px;
+}
+
+.route-summary-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.route-summary-item {
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.4);
+}
+
+body.dark .route-summary-item {
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.route-summary-item strong {
+  font-size: 0.8rem;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.route-summary-item span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.route-summary-empty {
+  color: var(--muted);
+  padding: 4px 2px 0;
+  font-size: 0.76rem;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: 120px repeat(var(--calendar-day-count, 7), minmax(140px, 1fr));

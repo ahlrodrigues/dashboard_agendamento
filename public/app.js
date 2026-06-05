@@ -45,6 +45,7 @@ const elements = {
   routeFilter: document.querySelector("#routeFilter"),
   routeFilterLabel: document.querySelector("#routeFilterLabel"),
   routeFilterHint: document.querySelector("#routeFilterHint"),
+  routeSummaryList: document.querySelector("#routeSummaryList"),
   searchFilter: document.querySelector("#searchFilter"),
   clearFiltersButton: document.querySelector("#clearFiltersButton"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -943,6 +944,50 @@ function renderNotices(notices) {
   }
   elements.noticeArea.innerHTML = notices
     .map((notice) => `<div class="notice">${notice}</div>`)
+    .join("");
+}
+
+function renderRouteSummary(items = []) {
+  if (!elements.routeSummaryList) {
+    return;
+  }
+
+  const today = toLocalIsoDate(new Date());
+  const schedules = (Array.isArray(items) ? items : []).filter((item) => String(item?.data || "").trim() === today);
+  if (!schedules.length) {
+    elements.routeSummaryList.innerHTML = `<div class="route-summary-empty">Nenhum agendamento hoje.</div>`;
+    return;
+  }
+
+  const groups = new Map();
+  for (const item of schedules) {
+    const technician = getDisplayTechnicianName(item?.tecnico);
+    if (!technician) {
+      continue;
+    }
+    const key = normalizeTechnicianKey(technician) || technician.toLowerCase();
+    const current = groups.get(key) || { technician, pops: new Set(), count: 0 };
+    current.technician = current.technician || technician;
+    current.count += 1;
+    const pop = String(item?.rota || "").trim();
+    if (pop) {
+      current.pops.add(pop);
+    }
+    groups.set(key, current);
+  }
+
+  const entries = Array.from(groups.values()).sort((a, b) => a.technician.localeCompare(b.technician));
+
+  elements.routeSummaryList.innerHTML = entries
+    .map((entry) => {
+      const pops = Array.from(entry.pops).sort((a, b) => a.localeCompare(b));
+      return `
+        <article class="route-summary-item">
+          <strong>${escapeHtml(entry.technician)}</strong>
+          <span>${escapeHtml(pops.join(" · ") || "Sem POP")}</span>
+        </article>
+      `;
+    })
     .join("");
 }
 
@@ -1920,6 +1965,7 @@ async function loadDashboard() {
   restoreAndPruneConfirmationSelection();
 
   renderSummary(data.summary);
+  renderRouteSummary(data.schedules);
   renderNotices(data.notices);
   updateMeta(data);
   applyDashboardView();
