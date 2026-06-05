@@ -1339,10 +1339,10 @@ function getRouteFilterMatchKeys(item, filters = getCurrentDashboardFilters(), r
     return new Set();
   }
 
-  const dayItems = rows.filter((candidate) => String(candidate?.data || "").trim() === day);
   const routeKeys = new Set();
 
   if (isTechnicianRouteModeEnabled()) {
+    const dayItems = rows.filter((candidate) => String(candidate?.data || "").trim() === day);
     const selectedTechnicians = new Set(
       selectedValues.map((value) => normalizeTechnicianKey(getDisplayTechnicianName(value))).filter(Boolean)
     );
@@ -1360,29 +1360,12 @@ function getRouteFilterMatchKeys(item, filters = getCurrentDashboardFilters(), r
     return routeKeys;
   }
 
-  const selectedPops = new Set(selectedValues.map((value) => normalizePopKey(value)).filter(Boolean));
-  const techniciansInSelectedPops = new Set();
-
-  for (const candidate of dayItems) {
-    const popKey = normalizePopKey(candidate?.rota);
-    if (!popKey || !selectedPops.has(popKey)) {
-      continue;
-    }
-    routeKeys.add(popKey);
-    const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(candidate?.tecnico));
-    if (technicianKey) {
-      techniciansInSelectedPops.add(technicianKey);
+  for (const value of selectedValues) {
+    const popKey = normalizePopKey(value);
+    if (popKey) {
+      routeKeys.add(popKey);
     }
   }
-
-  for (const candidate of dayItems) {
-    const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(candidate?.tecnico));
-    if (!technicianKey || !techniciansInSelectedPops.has(technicianKey)) {
-      continue;
-    }
-    routeKeys.add(normalizePopKey(candidate?.rota));
-  }
-
   return routeKeys;
 }
 
