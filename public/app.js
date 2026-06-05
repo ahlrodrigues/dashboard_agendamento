@@ -1010,7 +1010,8 @@ function matchesDashboardFilters(item, filters = getCurrentDashboardFilters()) {
   const itemRouteKey = isTechnicianRouteModeEnabled()
     ? normalizeTechnicianKey(getDisplayTechnicianName(item.tecnico))
     : normalizePopKey(item.rota);
-  if (filters.selectedRoutes.size && !filters.selectedRoutes.has(itemRouteKey)) {
+  const expandedRoutes = getRouteFilterMatchKeys(item, filters);
+  if (expandedRoutes.size && !expandedRoutes.has(itemRouteKey)) {
     return false;
   }
 
@@ -1280,6 +1281,64 @@ function normalizeRouteFilterKey(value) {
   return isTechnicianRouteModeEnabled()
     ? normalizeTechnicianKey(getDisplayTechnicianName(value))
     : normalizePopKey(value);
+}
+
+function getRouteFilterMatchKeys(item, filters = getCurrentDashboardFilters(), rows = collectSchedulesFromGrid()) {
+  const selectedValues = Array.from(filters.selectedRoutes || []).map((value) => String(value || "").trim()).filter(Boolean);
+  if (!selectedValues.length) {
+    return new Set();
+  }
+
+  const day = String(item?.data || "").trim();
+  if (!day) {
+    return new Set();
+  }
+
+  const dayItems = rows.filter((candidate) => String(candidate?.data || "").trim() === day);
+  const routeKeys = new Set();
+
+  if (isTechnicianRouteModeEnabled()) {
+    const selectedTechnicians = new Set(
+      selectedValues.map((value) => normalizeTechnicianKey(getDisplayTechnicianName(value))).filter(Boolean)
+    );
+    for (const candidate of dayItems) {
+      const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(candidate?.tecnico));
+      if (!technicianKey || !selectedTechnicians.has(technicianKey)) {
+        continue;
+      }
+      routeKeys.add(technicianKey);
+      const pop = String(candidate?.rota || "").trim();
+      if (pop) {
+        routeKeys.add(normalizePopKey(pop));
+      }
+    }
+    return routeKeys;
+  }
+
+  const selectedPops = new Set(selectedValues.map((value) => normalizePopKey(value)).filter(Boolean));
+  const techniciansInSelectedPops = new Set();
+
+  for (const candidate of dayItems) {
+    const popKey = normalizePopKey(candidate?.rota);
+    if (!popKey || !selectedPops.has(popKey)) {
+      continue;
+    }
+    routeKeys.add(popKey);
+    const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(candidate?.tecnico));
+    if (technicianKey) {
+      techniciansInSelectedPops.add(technicianKey);
+    }
+  }
+
+  for (const candidate of dayItems) {
+    const technicianKey = normalizeTechnicianKey(getDisplayTechnicianName(candidate?.tecnico));
+    if (!technicianKey || !techniciansInSelectedPops.has(technicianKey)) {
+      continue;
+    }
+    routeKeys.add(normalizePopKey(candidate?.rota));
+  }
+
+  return routeKeys;
 }
 
 function collectSchedulesFromGridData(grid) {
