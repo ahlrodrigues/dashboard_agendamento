@@ -1709,6 +1709,59 @@ function normalizeSgpClassificationDetailRows(rows, selectedValue = "") {
     }));
 }
 
+function normalizeSgpMotivoRows(rows) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows
+    .map((item) => {
+      const id = String(item?.id ?? item?.value ?? item?.pk ?? "").trim();
+      const descricao = String(item?.descricao ?? item?.label ?? item?.nome ?? item?.name ?? "").trim();
+      const classificacoes = Array.isArray(item?.classificacoes)
+        ? item.classificacoes
+          .map((classification) => ({
+            value: String(classification?.id ?? classification?.value ?? classification?.pk ?? "").trim(),
+            label: String(classification?.descricao ?? classification?.label ?? classification?.nome ?? classification?.name ?? "").trim()
+          }))
+          .filter((classification) => classification.value && classification.label)
+        : [];
+
+      return {
+        id,
+        descricao,
+        classificacoes,
+        classificacoesObrigatorio: parseBooleanish(
+          item?.classificacoes_obrigatorio ??
+            item?.classificacoesObrigatorio ??
+            item?.classification_required ??
+            item?.classificationRequired
+        ) === true,
+        ativo: parseBooleanish(item?.ativo ?? item?.active ?? item?.is_active ?? item?.enabled)
+      };
+    })
+    .filter((item) => item.id || item.descricao);
+}
+
+async function fetchSgpMotivoCatalog(config, session) {
+  const baseUrl = String(session.baseUrl || "").replace(/\/+$/, "");
+  const url = `${baseUrl}/api/os/ocorrencia/motivo/list/?app=${encodeURIComponent(String(config.app_token_auth?.app || "").trim())}&token=${encodeURIComponent(String(config.app_token_auth?.token || "").trim())}`;
+  const response = await fetch(url, {
+    headers: {
+      Cookie: session.cookies,
+      "X-Requested-With": "XMLHttpRequest",
+      ...buildSgpAuthHeaders(config, null)
+    },
+    signal: AbortSignal.timeout(Number(config.dashboard?.timeout_sgp_ms || DEFAULT_TIMEOUT_MS))
+  });
+  if (!response.ok) {
+    throw new Error(`Falha ao consultar catalogo de motivos do SGP (${response.status}).`);
+  }
+
+  const data = await response.json();
+  return normalizeSgpMotivoRows(data);
+}
+
 async function fetchSgpActiveClassificationOptionsForReason(config, session, reasonId, selectedValue = "") {
   const normalizedReasonId = String(reasonId || "").trim();
   if (!normalizedReasonId) {
@@ -2097,6 +2150,13 @@ async function getOsDetails(config, osId, credentials = null) {
     const classificationValue = extractHtmlFieldValue(html, "tipo_classificacoes") || "";
     const classificationLabel = extractHtmlSelectSelectedLabel(html, "tipo_classificacoes") || classificationValue;
     const reasonValue = extractHtmlFieldValue(html, "motivoos") || "";
+    let motivoCatalogItem = null;
+    try {
+      const motivoCatalog = await fetchSgpMotivoCatalog(config, session);
+      motivoCatalogItem = motivoCatalog.find((item) => item.id === reasonValue) || null;
+    } catch (motivoError) {
+      console.warn("[getOsDetails] Falha ao consultar catalogo de motivos do SGP:", motivoError.message);
+    }
     const fallbackClassificationOptions = extractHtmlSelectOptions(html, "tipo_classificacoes")
       .filter((item) => String(item?.value || "").trim())
       .filter(isSgpClassificationActive)
@@ -2119,6 +2179,9 @@ async function getOsDetails(config, osId, credentials = null) {
       ? classificationValue
       : "";
     const activeClassificationLabel = activeClassificationValue ? classificationLabel : "";
+    const motivoRequiresClassification = motivoCatalogItem
+      ? Boolean(motivoCatalogItem.classificacoesObrigatorio && classificationOptions.length > 0)
+      : false;
     const parsedSchedule = extractSgpScheduledDateTime({
       data_agendamento: dataAgendamento
     });
@@ -2140,7 +2203,10 @@ async function getOsDetails(config, osId, credentials = null) {
       classification_type: activeClassificationValue,
       classification_label: activeClassificationLabel,
       classification_options: classificationOptions,
-      classification_required: classificationOptions.length > 0 && !activeClassificationValue
+      classification_required: Boolean(
+        (motivoCatalogItem ? motivoRequiresClassification : classificationOptions.length > 0) &&
+          !activeClassificationValue
+      )
     };
   } catch (error) {
     console.error("[getOsDetails] Erro:", error.message, error.detail || "");
