@@ -4732,6 +4732,9 @@ function resolvePriorityForScheduledOs(config, entry) {
     return null;
   }
   const desired = Number(config.agendamento?.prioridade_os_ao_agendar);
+  if (Number.isFinite(desired) && desired === 0) {
+    return null;
+  }
   if (Number.isFinite(desired) && desired > 0) {
     return desired;
   }
