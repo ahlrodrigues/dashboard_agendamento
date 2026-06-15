@@ -16,7 +16,8 @@ const state = {
   isAdmin: false,
   isOperator: false,
   compactView: true,
-  darkMode: false
+  darkMode: false,
+  routeSummaryDate: ""
 };
 
 const CONFIRMATION_SELECTION_STORAGE_PREFIX = "dashboard_confirmation_selection_ids";
@@ -45,7 +46,9 @@ const elements = {
   routeFilter: document.querySelector("#routeFilter"),
   routeFilterLabel: document.querySelector("#routeFilterLabel"),
   routeFilterHint: document.querySelector("#routeFilterHint"),
-  routeSummaryDate: document.querySelector("#routeSummaryDate"),
+  routeSummaryDateLabel: document.querySelector("#routeSummaryDateLabel"),
+  routeSummaryPrevButton: document.querySelector("#routeSummaryPrevButton"),
+  routeSummaryNextButton: document.querySelector("#routeSummaryNextButton"),
   routeSummaryList: document.querySelector("#routeSummaryList"),
   searchFilter: document.querySelector("#searchFilter"),
   clearFiltersButton: document.querySelector("#clearFiltersButton"),
@@ -954,6 +957,9 @@ function renderRouteSummary(items = [], selectedDate = "") {
   }
 
   const dateFilter = String(selectedDate || "").trim() || toLocalIsoDate(new Date());
+  if (elements.routeSummaryDateLabel) {
+    elements.routeSummaryDateLabel.textContent = formatDate(dateFilter);
+  }
   const schedules = (Array.isArray(items) ? items : []).filter((item) => String(item?.data || "").trim() === dateFilter);
   if (!schedules.length) {
     elements.routeSummaryList.innerHTML = `<div class="route-summary-empty">Nenhum agendamento nesta data.</div>`;
@@ -1949,10 +1955,10 @@ async function loadDashboard() {
   restoreAndPruneConfirmationSelection();
 
   renderSummary(data.summary);
-  if (elements.routeSummaryDate && !elements.routeSummaryDate.value) {
-    elements.routeSummaryDate.value = toLocalIsoDate(new Date());
+  if (!state.routeSummaryDate) {
+    state.routeSummaryDate = toLocalIsoDate(new Date());
   }
-  renderRouteSummary(data.schedules, elements.routeSummaryDate?.value);
+  renderRouteSummary(data.schedules, state.routeSummaryDate);
   renderNotices(data.notices);
   updateMeta(data);
   applyDashboardView();
@@ -1969,10 +1975,21 @@ async function loadDashboard() {
   }
 }
 
-if (elements.routeSummaryDate) {
-  elements.routeSummaryDate.addEventListener("change", () => {
-    const schedules = state.data?.schedules || [];
-    renderRouteSummary(schedules, elements.routeSummaryDate.value);
+function updateRouteSummaryDate(daysDelta) {
+  state.routeSummaryDate = shiftDate(state.routeSummaryDate || toLocalIsoDate(new Date()), daysDelta);
+  const schedules = state.data?.schedules || [];
+  renderRouteSummary(schedules, state.routeSummaryDate);
+}
+
+if (elements.routeSummaryPrevButton) {
+  elements.routeSummaryPrevButton.addEventListener("click", () => {
+    updateRouteSummaryDate(-1);
+  });
+}
+
+if (elements.routeSummaryNextButton) {
+  elements.routeSummaryNextButton.addEventListener("click", () => {
+    updateRouteSummaryDate(1);
   });
 }
 

@@ -699,14 +699,54 @@ body.dark .hero {
   padding: 16px 18px 12px;
 }
 
+.route-summary-date-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.route-summary-arrow {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.route-summary-date-display {
+  display: grid;
+  gap: 2px;
+  text-align: center;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+body.dark .route-summary-date-display {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.route-summary-date-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.route-summary-date-display strong {
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.2;
+}
+
 .route-summary-list {
   display: grid;
   gap: 4px;
   margin-top: 8px;
-}
-
-.route-summary-date-field {
-  margin: 10px 0 4px;
 }
 
 .route-summary-item {

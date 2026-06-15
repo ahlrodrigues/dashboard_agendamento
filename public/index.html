@@ -8,8 +8,8 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Agenda SGP Call Center</title>
-	  <link rel="stylesheet" href="/styles.css?v=26" />
-		  <script src="/app.js?v=30" defer></script>
+	  <link rel="stylesheet" href="/styles.css?v=27" />
+		  <script src="/app.js?v=31" defer></script>
 </head>
 
 <body>
@@ -48,10 +48,14 @@
         <div class="panel-header">
           <h2>Técnicos e POPs</h2>
         </div>
-        <label class="field route-summary-date-field">
-          <span>Data</span>
-          <input id="routeSummaryDate" type="date" />
-        </label>
+        <div class="route-summary-date-bar">
+          <button id="routeSummaryPrevButton" class="ghost-button small-button route-summary-arrow" type="button" aria-label="Dia anterior">‹</button>
+          <div class="route-summary-date-display">
+            <span class="route-summary-date-label">Data</span>
+            <strong id="routeSummaryDateLabel">-</strong>
+          </div>
+          <button id="routeSummaryNextButton" class="ghost-button small-button route-summary-arrow" type="button" aria-label="Próximo dia">›</button>
+        </div>
         <div id="routeSummaryList" class="route-summary-list"></div>
       </section>
 
