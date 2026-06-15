@@ -45,6 +45,7 @@ const elements = {
   routeFilter: document.querySelector("#routeFilter"),
   routeFilterLabel: document.querySelector("#routeFilterLabel"),
   routeFilterHint: document.querySelector("#routeFilterHint"),
+  routeSummaryDate: document.querySelector("#routeSummaryDate"),
   routeSummaryList: document.querySelector("#routeSummaryList"),
   searchFilter: document.querySelector("#searchFilter"),
   clearFiltersButton: document.querySelector("#clearFiltersButton"),
@@ -947,15 +948,15 @@ function renderNotices(notices) {
     .join("");
 }
 
-function renderRouteSummary(items = []) {
+function renderRouteSummary(items = [], selectedDate = "") {
   if (!elements.routeSummaryList) {
     return;
   }
 
-  const today = toLocalIsoDate(new Date());
-  const schedules = (Array.isArray(items) ? items : []).filter((item) => String(item?.data || "").trim() === today);
+  const dateFilter = String(selectedDate || "").trim() || toLocalIsoDate(new Date());
+  const schedules = (Array.isArray(items) ? items : []).filter((item) => String(item?.data || "").trim() === dateFilter);
   if (!schedules.length) {
-    elements.routeSummaryList.innerHTML = `<div class="route-summary-empty">Nenhum agendamento hoje.</div>`;
+    elements.routeSummaryList.innerHTML = `<div class="route-summary-empty">Nenhum agendamento nesta data.</div>`;
     return;
   }
 
@@ -1948,7 +1949,10 @@ async function loadDashboard() {
   restoreAndPruneConfirmationSelection();
 
   renderSummary(data.summary);
-  renderRouteSummary(data.schedules);
+  if (elements.routeSummaryDate && !elements.routeSummaryDate.value) {
+    elements.routeSummaryDate.value = toLocalIsoDate(new Date());
+  }
+  renderRouteSummary(data.schedules, elements.routeSummaryDate?.value);
   renderNotices(data.notices);
   updateMeta(data);
   applyDashboardView();
@@ -1963,6 +1967,13 @@ async function loadDashboard() {
   if (data.period?.weekEnd && elements.endDateFilter.value !== data.period.weekEnd) {
     elements.endDateFilter.value = data.period.weekEnd;
   }
+}
+
+if (elements.routeSummaryDate) {
+  elements.routeSummaryDate.addEventListener("change", () => {
+    const schedules = state.data?.schedules || [];
+    renderRouteSummary(schedules, elements.routeSummaryDate.value);
+  });
 }
 
 function scheduleNextAutoRefresh() {

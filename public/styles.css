@@ -705,6 +705,10 @@ body.dark .hero {
   margin-top: 8px;
 }
 
+.route-summary-date-field {
+  margin: 10px 0 4px;
+}
+
 .route-summary-item {
   display: grid;
   gap: 1px;
